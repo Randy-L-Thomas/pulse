@@ -309,6 +309,23 @@ async fn probe_http(spec: &HttpCfg, client: &reqwest::Client) -> Cell {
         primary = "down".into();
     }
 
+    if let Some(task) = &spec.task {
+        match task_last_result(task) {
+            Some(0) | Some(267009) => {
+                detail = format!("{detail} · task ok");
+            }
+            Some(code) => {
+                if !matches!(status, Status::Down) {
+                    status = Status::Degraded;
+                }
+                detail = format!("{detail} · task {code}");
+            }
+            None => {
+                detail = format!("{detail} · task ?");
+            }
+        }
+    }
+
     let has_open = spec.open.is_some();
     let has_start = spec.start_program.is_some();
     let has_stop = spec.stop_program.is_some();
@@ -536,6 +553,35 @@ fn default_gateway() -> Option<String> {
             let gw = parts[2];
             if gw != "On-link" && gw != "0.0.0.0" {
                 return Some(gw.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Last Task Result from `schtasks`. 0 = success, 267009 = still running (ok).
+fn task_last_result(name: &str) -> Option<u32> {
+    let mut cmd = Command::new("schtasks");
+    cmd.args(["/Query", "/TN", name, "/FO", "LIST", "/V"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        let Some((key, val)) = line.split_once(':') else { continue };
+        if key.trim().eq_ignore_ascii_case("Last Result") {
+            let v = val.trim();
+            if let Ok(n) = v.parse::<u32>() {
+                return Some(n);
+            }
+            if let Some(hex) = v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")) {
+                return u32::from_str_radix(hex, 16).ok();
             }
         }
     }

@@ -49,7 +49,6 @@ pub fn strip_origin(window: &WebviewWindow, cfg: &Config) -> ((i32, i32), u32) {
     ((0, 0), cfg.full_width)
 }
 
-#[allow(dead_code)]
 pub fn clamp_resize(window: &WebviewWindow, cfg: &Config) {
     let Ok(size) = window.inner_size() else { return };
     let (_, max_w) = strip_origin(window, cfg);

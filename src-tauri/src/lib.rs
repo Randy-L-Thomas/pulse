@@ -70,6 +70,13 @@ pub fn run() {
         .setup(move |app| {
             let win = app.get_webview_window("main").expect("main window");
             let _ = window::dock_and_size(&win, &state.cfg, WidthMode::Half);
+            let clamp_win = win.clone();
+            let clamp_cfg = state.cfg.clone();
+            win.on_window_event(move |ev| {
+                if matches!(ev, tauri::WindowEvent::Resized(_)) {
+                    window::clamp_resize(&clamp_win, &clamp_cfg);
+                }
+            });
             let handle = app.handle().clone();
             let loop_state = state.clone();
             tauri::async_runtime::spawn(async move {

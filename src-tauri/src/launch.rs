@@ -93,7 +93,8 @@ fn spawn_cli(
     detach: bool,
 ) -> Result<String, String> {
     allow_program(program)?;
-    let mut cmd = Command::new(program);
+    let resolved = resolve_program(program);
+    let mut cmd = Command::new(&resolved);
     cmd.args(args);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -114,12 +115,12 @@ fn spawn_cli(
     if detach {
         cmd.spawn().map_err(|e| {
             if let Some(name) = task {
-                format!("could not run {program} ({e}). Copy: Start-ScheduledTask -TaskName {name}")
+                format!("could not run {resolved} ({e}). Copy: Start-ScheduledTask -TaskName {name}")
             } else {
-                format!("could not run {program}: {e}")
+                format!("could not run {resolved}: {e}")
             }
         })?;
-        return Ok(format!("started {program} {}", args.join(" ")));
+        return Ok(format!("started {resolved} {}", args.join(" ")));
     }
 
     match cmd.output() {
@@ -152,9 +153,27 @@ fn spawn_cli(
     }
 }
 
+fn resolve_program(program: &str) -> String {
+    #[cfg(windows)]
+    {
+        if program.eq_ignore_ascii_case("npm") {
+            return "npm.cmd".into();
+        }
+    }
+    program.to_string()
+}
+
 fn allow_program(program: &str) -> Result<(), String> {
-    match program {
-        "CAM" | "cam" | "ice" | "npm" | "npm.cmd" => Ok(()),
+    let base = program
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(program)
+        .trim_end_matches(".exe")
+        .trim_end_matches(".cmd")
+        .trim_end_matches(".CMD")
+        .trim_end_matches(".bat");
+    match base.to_ascii_lowercase().as_str() {
+        "cam" | "ice" | "npm" => Ok(()),
         _ => Err(format!("program {program} is not on the allow list")),
     }
 }
