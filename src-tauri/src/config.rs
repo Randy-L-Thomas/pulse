@@ -173,11 +173,18 @@ pub struct FileCfg {
     pub open: Option<String>,
 }
 
-pub fn user_config_path() -> PathBuf {
+pub fn user_config_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("pulse")
-        .join("probes.toml")
+}
+
+pub fn user_config_path() -> PathBuf {
+    user_config_dir().join("probes.toml")
+}
+
+pub fn autostart_inited_path() -> PathBuf {
+    user_config_dir().join("autostart-inited")
 }
 
 pub fn load_config() -> Result<Config, String> {

@@ -15,6 +15,9 @@
     "core:window:allow-set-max-size",
     "opener:default",
     "updater:default",
-    "process:default"
+    "process:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
   ]
 }
