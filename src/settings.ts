@@ -305,6 +305,13 @@ export function wireSettings(toast: ToastFn) {
       toast(String(e));
     }
   });
+  document.getElementById("btn-open-releases")!.addEventListener("click", async () => {
+    try {
+      await openUrl(RELEASES_URL);
+    } catch {
+      toast("open " + RELEASES_URL, 4000);
+    }
+  });
   document.getElementById("btn-check-update")!.addEventListener("click", async () => {
     const status = document.getElementById("update-status") as HTMLElement;
     const last = document.getElementById("update-last") as HTMLElement;
@@ -321,13 +328,8 @@ export function wireSettings(toast: ToastFn) {
       status.textContent = "restarting";
       await relaunch();
     } catch (e) {
-      status.textContent = "opening Releases";
-      toast(String(e), 4000);
-      try {
-        await openUrl(RELEASES_URL);
-      } catch {
-        toast("open " + RELEASES_URL, 4000);
-      }
+      status.textContent = String(e);
+      toast(String(e), 5000);
     }
   });
 
