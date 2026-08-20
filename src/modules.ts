@@ -48,10 +48,28 @@ export function wireModules(toast: ToastFn) {
     }
   }
 
+  function pickLang(value: string, fallback: string) {
+    return value === "en" || value === "es" ? value : fallback;
+  }
+
+  function mtError(err: unknown) {
+    const s = String(err);
+    if (/Ollama not running on 11434/i.test(s)) return "Ollama not running on 11434";
+    if (
+      /connection refused|actively refused|tcp connect|error sending request|timed out|timeout|connect error|11434/i.test(
+        s,
+      )
+    ) {
+      return "Ollama not running on 11434";
+    }
+    return s;
+  }
+
   async function persist() {
     if (!ui) return;
-    ui.mt_from = mtFrom.value;
-    ui.mt_to = mtTo.value;
+    ui.mt_from = pickLang(mtFrom.value, "es");
+    ui.mt_to = pickLang(mtTo.value, "en");
+    ui.mt_enrich = false;
     ui.ollama_model = chatModel.value;
     ui.wa_title = ocrWin.value || ui.wa_title;
     try {
@@ -119,11 +137,10 @@ export function wireModules(toast: ToastFn) {
     const gen = ++mtGen;
     mtStatus.textContent = "…";
     try {
-      await persist();
       const out = await invoke<{ text: string; cached: boolean; engine: string }>("translate_text", {
         source,
-        from: mtFrom.value,
-        to: mtTo.value,
+        from: pickLang(mtFrom.value, "es"),
+        to: pickLang(mtTo.value, "en"),
         enrich: false,
       });
       if (gen !== mtGen) return;
@@ -131,7 +148,8 @@ export function wireModules(toast: ToastFn) {
       mtStatus.textContent = out.cached ? "cache" : out.engine;
     } catch (e) {
       if (gen !== mtGen) return;
-      mtStatus.textContent = String(e);
+      mtDst.value = "";
+      mtStatus.textContent = mtError(e);
     }
   }
 
@@ -144,10 +162,10 @@ export function wireModules(toast: ToastFn) {
     btn.addEventListener("click", () => showMod(btn.dataset.mod || "translate"));
   });
   document.getElementById("mt-swap")!.addEventListener("click", () => {
-    const from = mtFrom.value;
-    const to = mtTo.value;
+    const from = pickLang(mtFrom.value, "es");
+    const to = pickLang(mtTo.value, "en");
     mtFrom.value = to;
-    mtTo.value = from === "auto" ? (to === "en" ? "es" : "en") : from;
+    mtTo.value = from;
     const src = mtSrc.value;
     mtSrc.value = mtDst.value;
     mtDst.value = src;
@@ -249,9 +267,12 @@ export function wireModules(toast: ToastFn) {
   invoke<UiState>("get_ui")
     .then(async (s) => {
       ui = s;
-      mtFrom.value = s.mt_from === "auto" || s.mt_from ? s.mt_from : "es";
-      if (![...mtFrom.options].some((o) => o.value === mtFrom.value)) mtFrom.value = "es";
-      mtTo.value = s.mt_to || "en";
+      mtFrom.value = pickLang(s.mt_from, "es");
+      mtTo.value = pickLang(s.mt_to, "en");
+      if (mtFrom.value === mtTo.value) {
+        mtFrom.value = "es";
+        mtTo.value = "en";
+      }
       showMod(s.last_module);
       await loadWindows();
       await loadModels();

@@ -29,6 +29,7 @@ fn save_cache(cache: &Cache) {
 
 fn key(from: &str, to: &str, text: &str) -> String {
     let mut h = Sha256::new();
+    h.update(b"es-MX|en-US|v1|");
     h.update(from.as_bytes());
     h.update(b"|");
     h.update(to.as_bytes());
@@ -47,7 +48,6 @@ pub struct TranslateOut {
 pub async fn translate(
     client: &reqwest::Client,
     ollama_url: &str,
-    model: &str,
     from: &str,
     to: &str,
     source: &str,
@@ -64,8 +64,16 @@ pub async fn translate(
     let from = if from == "auto" {
         detect_lang(src)
     } else {
-        from
+        normalize_lang(from)
     };
+    let to = normalize_lang(to);
+    if from == to {
+        return Ok(TranslateOut {
+            text: src.to_string(),
+            cached: true,
+            engine: "same".into(),
+        });
+    }
     let k = key(from, to, src);
     let mut cache = load_cache();
     if !enrich {
@@ -77,9 +85,9 @@ pub async fn translate(
             });
         }
     }
-    let mut out = mt_ollama(client, ollama_url, model, from, to, src).await?;
+    let mut out = mt_ollama(client, ollama_url, from, to, src).await?;
     if enrich {
-        if let Ok(polished) = enrich_ollama(client, ollama_url, model, from, to, src, &out).await {
+        if let Ok(polished) = enrich_ollama(client, ollama_url, from, to, src, &out).await {
             if !polished.trim().is_empty() {
                 out = polished;
             }
@@ -110,71 +118,206 @@ pub fn detect_lang(text: &str) -> &'static str {
     }
 }
 
+fn normalize_lang(code: &str) -> &'static str {
+    match code.trim().to_ascii_lowercase().as_str() {
+        "en" | "en-us" | "en_us" | "us" => "en",
+        "es" | "es-mx" | "es_mx" | "mx" => "es",
+        other if other.starts_with("en") => "en",
+        _ => "es",
+    }
+}
+
 fn lang_name(code: &str) -> &'static str {
-    match code {
-        "es" => "Spanish",
-        "en" => "English",
-        "fr" => "French",
-        "de" => "German",
-        "pt" => "Portuguese",
-        "it" => "Italian",
-        "ar" => "Arabic",
-        "zh" => "Chinese",
-        "ja" => "Japanese",
+    match normalize_lang(code) {
+        "es" => "Mexican Spanish",
+        "en" => "American English",
         _ => "the target language",
     }
+}
+
+fn mt_prompt(from: &str, to: &str, src: &str) -> String {
+    format!(
+        "You are a translator for Mexican Spanish and American English chat messages.\n\
+Translate from {} to {}.\n\
+Mexican Spanish: tú for casual chat, usted if the source is clearly formal. \
+Mexico vocabulary (computadora, celular, carro, platicar, departamento). \
+Never Spain-only forms (vosotros, coche, ordenador, móvil, piso).\n\
+American English: US spelling and vocabulary (color, truck, apartment, cell phone, elevator, soccer). \
+Never British-only forms (colour, lorry, flat, mobile, lift, football).\n\
+Output ONLY the translation. No quotes, labels, notes, or extra lines.\n\n{}",
+        lang_name(from),
+        lang_name(to),
+        src
+    )
 }
 
 async fn mt_ollama(
     client: &reqwest::Client,
     base: &str,
-    model: &str,
     from: &str,
     to: &str,
     src: &str,
 ) -> Result<String, String> {
-    let model = pick_model(client, base, model).await?;
-    let prompt = format!(
-        "Translate from {} to {}. Output only the translation, no quotes or notes.\n\n{}",
-        lang_name(from),
-        lang_name(to),
-        src
-    );
-    generate(client, base, &model, &prompt, 0.0).await
+    let model = pick_model(client, base).await?;
+    let raw = generate(client, base, &model, &mt_prompt(from, to, src), 0.0).await?;
+    let out = clean_translation(&raw, src);
+    if out.is_empty() {
+        return Err(format!("empty translation from {model}"));
+    }
+    Ok(out)
 }
 
 async fn enrich_ollama(
     client: &reqwest::Client,
     base: &str,
-    model: &str,
     from: &str,
     to: &str,
     src: &str,
     draft: &str,
 ) -> Result<String, String> {
-    let model = pick_model(client, base, model).await?;
+    let model = pick_model(client, base).await?;
     let prompt = format!(
-        "Improve this {} translation of a chat message so it sounds natural (slang/register). Output only the rewritten translation.\n\nSource ({}): {}\nDraft: {}",
+        "Improve this {} translation of a chat message so it sounds natural for Mexico/US. \
+Output only the rewritten translation.\n\nSource ({}): {}\nDraft: {}",
         lang_name(to),
         lang_name(from),
         src,
         draft
     );
-    generate(client, base, &model, &prompt, 0.3).await
+    let raw = generate(client, base, &model, &prompt, 0.3).await?;
+    Ok(clean_translation(&raw, src))
 }
 
-async fn pick_model(client: &reqwest::Client, base: &str, preferred: &str) -> Result<String, String> {
-    if !preferred.trim().is_empty() {
-        return Ok(preferred.trim().to_string());
+fn is_reasoning_model(name: &str) -> bool {
+    let l = name.to_ascii_lowercase();
+    l.contains("deepseek-r1")
+        || l.contains("r1-")
+        || l.contains(":r1")
+        || l.contains("thinking")
+        || l.contains("reason")
+}
+
+fn is_mt_model(name: &str) -> bool {
+    let l = name.to_ascii_lowercase();
+    l.contains("translate")
+        || l.contains("nllb")
+        || l.contains("madlad")
+        || l.contains("m2m")
+        || l.contains("opus-mt")
+        || l.contains("-mt")
+        || l.contains("mt:")
+}
+
+pub(crate) fn choose_mt_model(names: &[String]) -> Option<String> {
+    if names.is_empty() {
+        return None;
     }
-    let names = crate::ollama::list_models(client, base).await?;
-    let prefer = ["llama3.2:1b", "llama3.2:3b", "qwen2.5:1.5b", "qwen2.5:3b", "gemma2:2b"];
+    if let Some(n) = names.iter().find(|n| is_mt_model(n)) {
+        return Some(n.clone());
+    }
+    let prefer = [
+        "llama3.2:1b",
+        "llama3.2:3b",
+        "qwen2.5:1.5b",
+        "qwen2.5:3b",
+        "gemma2:2b",
+        "llama3.1:8b",
+        "qwen2.5:7b",
+        "qwen2.5:14b",
+    ];
     for p in prefer {
-        if names.iter().any(|n| n == p || n.starts_with(p)) {
-            return Ok(p.to_string());
+        if let Some(n) = names.iter().find(|n| n.as_str() == p || n.starts_with(p)) {
+            return Some(n.clone());
         }
     }
-    names.into_iter().next().ok_or_else(|| "no Ollama models — pull one for local MT".into())
+    let instructish = |n: &str| {
+        let l = n.to_ascii_lowercase();
+        l.contains("qwen")
+            || l.contains("llama")
+            || l.contains("gemma")
+            || l.contains("mistral")
+            || l.contains("phi")
+    };
+    if let Some(n) = names
+        .iter()
+        .find(|n| instructish(n) && !is_reasoning_model(n))
+    {
+        return Some(n.clone());
+    }
+    if let Some(n) = names.iter().find(|n| !is_reasoning_model(n)) {
+        return Some(n.clone());
+    }
+    names.first().cloned()
+}
+
+async fn pick_model(client: &reqwest::Client, base: &str) -> Result<String, String> {
+    let names = crate::ollama::list_models(client, base)
+        .await
+        .map_err(map_ollama_err)?;
+    choose_mt_model(&names).ok_or_else(|| "no Ollama models — pull one for local MT".into())
+}
+
+fn map_ollama_err(err: impl std::fmt::Display) -> String {
+    let msg = err.to_string();
+    let l = msg.to_ascii_lowercase();
+    if l.contains("connection refused")
+        || l.contains("actively refused")
+        || l.contains("tcp connect")
+        || l.contains("error sending request")
+        || l.contains("timed out")
+        || l.contains("timeout")
+        || l.contains("connect error")
+        || l.contains("error waiting for response")
+    {
+        return "Ollama not running on 11434".into();
+    }
+    if msg.starts_with("Ollama") {
+        msg
+    } else {
+        format!("Ollama: {msg}")
+    }
+}
+
+fn clean_translation(raw: &str, src: &str) -> String {
+    let mut t = raw.trim().to_string();
+    if let Some(rest) = t.strip_prefix("<think>") {
+        t = if let Some((_, after)) = rest.split_once("</think>") {
+            after.trim().to_string()
+        } else {
+            String::new()
+        };
+    }
+    for prefix in [
+        "Translation:",
+        "Translated:",
+        "American English:",
+        "Mexican Spanish:",
+        "English:",
+        "Spanish:",
+    ] {
+        if let Some(rest) = t.strip_prefix(prefix) {
+            t = rest.trim().to_string();
+        }
+    }
+    t = t
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| t.strip_prefix('“').and_then(|s| s.strip_suffix('”')))
+        .map(str::trim)
+        .unwrap_or(&t)
+        .to_string();
+    if t.eq_ignore_ascii_case(src) {
+        return t;
+    }
+    t.lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with("Translate from")
+                && !line.starts_with("Output ONLY")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 async fn generate(
@@ -196,7 +339,7 @@ async fn generate(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Ollama: {e}"))?;
+        .map_err(map_ollama_err)?;
     if !res.status().is_success() {
         return Err(format!("Ollama HTTP {}", res.status()));
     }
@@ -210,7 +353,7 @@ async fn generate(
 
 #[cfg(test)]
 mod tests {
-    use super::detect_lang;
+    use super::{choose_mt_model, clean_translation, detect_lang, lang_name, mt_prompt, normalize_lang};
 
     #[test]
     fn detects_spanish_from_marks_and_words() {
@@ -220,5 +363,109 @@ mod tests {
     #[test]
     fn detects_english_from_common_words() {
         assert_eq!(detect_lang("The cat sat with you and that box."), "en");
+    }
+
+    #[test]
+    fn normalizes_mx_and_us_codes() {
+        assert_eq!(normalize_lang("es-MX"), "es");
+        assert_eq!(normalize_lang("en-US"), "en");
+        assert_eq!(lang_name("es"), "Mexican Spanish");
+        assert_eq!(lang_name("en"), "American English");
+    }
+
+    #[test]
+    fn prompt_is_mexico_and_us() {
+        let p = mt_prompt("es", "en", "Hola");
+        assert!(p.contains("Mexican Spanish"));
+        assert!(p.contains("American English"));
+        assert!(p.contains("vosotros"));
+        assert!(p.contains("lorry"));
+        assert!(p.contains("Hola"));
+    }
+
+    #[test]
+    fn prefers_translate_model_then_instruct_not_r1() {
+        let names = vec![
+            "deepseek-r1:14b".into(),
+            "qwen2.5-coder:14b".into(),
+        ];
+        assert_eq!(choose_mt_model(&names).as_deref(), Some("qwen2.5-coder:14b"));
+        let mt = vec!["llama3.2:3b".into(), "nllb-translate:latest".into()];
+        assert_eq!(choose_mt_model(&mt).as_deref(), Some("nllb-translate:latest"));
+    }
+
+    #[test]
+    fn strips_think_tags_and_labels() {
+        let raw = "<think>plan</think>\nTranslation: Hello\n";
+        assert_eq!(clean_translation(raw, "Hola"), "Hello");
+    }
+
+    #[test]
+    fn connection_errors_are_plain() {
+        assert_eq!(
+            super::map_ollama_err(
+                "error sending request for url: tcp connect error: connection refused"
+            ),
+            "Ollama not running on 11434"
+        );
+    }
+
+    #[tokio::test]
+    async fn same_language_returns_source() {
+        let client = reqwest::Client::new();
+        let out = super::translate(&client, "http://127.0.0.1:9", "es", "es", "Hola", false)
+            .await
+            .unwrap();
+        assert_eq!(out.text, "Hola");
+        assert_eq!(out.engine, "same");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs local Ollama on 11434"]
+    async fn live_mexican_spanish_american_english() {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(3))
+            .no_proxy()
+            .build()
+            .unwrap();
+        let url = "http://127.0.0.1:11434";
+        let es_en = super::translate(
+            &client,
+            url,
+            "es",
+            "en",
+            "Hola, ¿cómo estás? Te mando un mensaje.",
+            false,
+        )
+        .await
+        .expect("es→en");
+        assert!(
+            !es_en.text.is_empty() && !es_en.text.to_lowercase().contains("hola"),
+            "es→en echoed or empty: {}",
+            es_en.text
+        );
+
+        let en_es = super::translate(
+            &client,
+            url,
+            "en",
+            "es",
+            "Can you send me a photo of your apartment? I'll call you from my cell phone.",
+            false,
+        )
+        .await
+        .expect("en→es");
+        let low = en_es.text.to_lowercase();
+        assert!(
+            !en_es.text.is_empty() && !low.contains("apartment"),
+            "en→es echoed or empty: {}",
+            en_es.text
+        );
+        assert!(
+            low.contains("departamento") || low.contains("celular") || low.contains("foto"),
+            "en→es missing Mexican vocab: {}",
+            en_es.text
+        );
     }
 }
