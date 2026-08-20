@@ -1,5 +1,6 @@
-# Pulse v1 probe targets — TK421 copy. Runtime config is %APPDATA%\pulse\probes.toml.
-# This file is kept for reference; Settings → Preset TK421 loads presets/probes.tk421.toml.
+# TK421 / Randy preset — ICE, CAM, cam-mcp, Cursor, xsiam-ops, ws-ops.
+
+launch_allow = ["cam", "ice", "npm"]
 
 height = 440
 half_width = 960
@@ -8,22 +9,19 @@ monitor_width = 1920
 monitor_height = 440
 stale_secs = 1800
 
+[show]
+path = true
+cpu = true
+memory = true
+gpu = true
+
 [net]
 host = "google.com"
 https_url = "https://www.google.com"
 history = 48
 
-# Path cell: DNS lookup of dns_host vs ICMP to the default gateway (not Google RTT).
-# Yellow if DNS ≥ 80ms or gateway ≥ 40ms, or one of them fails. Red if both fail.
-# Right-click the cell → Info for host, times, gateway IP, and status.
 [path]
 dns_host = "google.com"
-
-# Disk left unused — utilization (CPU / RAM / GPU) is more useful on the strip.
-# [disk]
-# mount = "C:\\"
-# warn_pct = 15.0
-# crit_pct = 5.0
 
 [cpu]
 warn_pct = 80.0
@@ -37,13 +35,13 @@ crit_pct = 95.0
 warn_pct = 80.0
 crit_pct = 95.0
 
-# Cursor Desktop working-set (all Cursor.exe + helpers under the install).
-# Tune without a rebuild. Electron has crashed around ~4 GB on this machine —
-# warn early; red = crash neighborhood. Do not set crit below typical live usage
-# or the cell stays red all day.
-# Live working-set 2026-08-20: ~3.8 GB, so 2.5 warn / 3.8 crit would sit in red.
-# 3.0 warn = yellow (getting dangerous); 4.0 crit = red (crash neighborhood).
-[cursor]
+[[process]]
+id = "cursor"
+label = "Cursor"
+exe_name = "cursor"
+path_contains = ["\\programs\\cursor\\", "\\program files\\cursor\\", "\\program files (x86)\\cursor\\"]
+exclude_names = ["pulse", "code"]
+exclude_paths = ["\\microsoft vs code", "\\vscode\\"]
 warn_gb = 3.0
 crit_gb = 4.0
 
@@ -85,13 +83,6 @@ start_program = "npm"
 start_args = ["run", "mcp:http"]
 start_cwd = "C:\\dev\\cam-mcp"
 stdio_match = "cam-mcp"
-
-# Ollama left unused — Cursor Desktop working-set is more useful on the strip.
-# [[http]]
-# id = "ollama"
-# label = "Ollama"
-# url = "http://127.0.0.1:11434/api/tags"
-# open = "http://127.0.0.1:11434"
 
 [[file]]
 id = "xsiam"

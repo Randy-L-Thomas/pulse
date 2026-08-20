@@ -14,6 +14,7 @@
         <div class="title-actions">
           <button type="button" id="btn-half" class="tb" title="Half width — leave Translate on the right">Half</button>
           <button type="button" id="btn-full" class="tb" title="Full strip width">Full</button>
+          <button type="button" id="btn-settings" class="tb" title="Settings">Set</button>
           <button type="button" id="btn-pin" class="tb on" title="Stay on top of other windows" aria-pressed="true">Pin</button>
           <button type="button" id="btn-min" class="tb ico" title="Minimize">–</button>
           <button type="button" id="btn-close" class="tb ico" title="Close">×</button>
@@ -38,6 +39,67 @@
       <button type="button" class="spoke" data-action="stop" style="--a: 54deg">Stop</button>
       <button type="button" class="spoke" data-action="restart" style="--a: 126deg">Restart</button>
       <button type="button" class="spoke" data-action="copy" style="--a: 198deg">Copy</button>
+    </div>
+    <div id="settings" class="settings" hidden>
+      <header class="settings-head">
+        <span>Settings</span>
+        <nav class="settings-tabs">
+          <button type="button" class="tb on" data-tab="general">General</button>
+          <button type="button" class="tb" data-tab="cells">Cells</button>
+          <button type="button" class="tb" data-tab="update">Update</button>
+        </nav>
+        <button type="button" id="btn-settings-close" class="tb">Close</button>
+      </header>
+      <div class="settings-body">
+        <section id="tab-general" class="settings-tab">
+          <div class="settings-row">
+            <button type="button" id="set-half" class="tb">Half</button>
+            <button type="button" id="set-full" class="tb">Full</button>
+            <button type="button" id="set-pin" class="tb on">Pin</button>
+          </div>
+          <label>Strip width <input id="set-mon-w" type="number" min="800" max="3840" /></label>
+          <label>Strip height max <input id="set-mon-h" type="number" min="400" max="600" /></label>
+          <label>Allow start programs <input id="set-allow" class="wide" placeholder="cam, ice, npm" /></label>
+          <div class="settings-row">
+            <button type="button" id="btn-preset-tk421" class="tb">Preset TK421</button>
+            <button type="button" id="btn-preset-generic" class="tb">Preset generic</button>
+          </div>
+          <p class="hint">TK421 loads ICE/CAM/Cursor. Generic is Net + host meters only. Saved to AppData. Start/Stop stay off unless the program is in Allow start.</p>
+        </section>
+        <section id="tab-cells" class="settings-tab" hidden>
+          <div class="settings-row">
+            <label><input id="show-path" type="checkbox" /> Path</label>
+            <label><input id="show-cpu" type="checkbox" /> CPU</label>
+            <label><input id="show-memory" type="checkbox" /> RAM</label>
+            <label><input id="show-gpu" type="checkbox" /> GPU</label>
+          </div>
+          <div class="settings-row">
+            <label>CPU warn% <input id="cpu-warn" type="number" /></label>
+            <label>CPU crit% <input id="cpu-crit" type="number" /></label>
+            <label>RAM warn% <input id="mem-warn" type="number" /></label>
+            <label>RAM crit% <input id="mem-crit" type="number" /></label>
+            <label>GPU warn% <input id="gpu-warn" type="number" /></label>
+            <label>GPU crit% <input id="gpu-crit" type="number" /></label>
+          </div>
+          <h3>HTTP cells</h3>
+          <div id="http-list" class="stack"></div>
+          <button type="button" id="btn-add-http" class="tb">Add HTTP</button>
+          <h3>Process RAM</h3>
+          <div id="proc-list" class="stack"></div>
+          <button type="button" id="btn-add-proc" class="tb">Add process</button>
+        </section>
+        <section id="tab-update" class="settings-tab" hidden>
+          <p id="update-meta" class="hint"></p>
+          <p id="update-last" class="hint">last checked — never</p>
+          <div class="settings-row">
+            <button type="button" id="btn-check-update" class="tb">Check now</button>
+            <span id="update-status" class="hint"></span>
+          </div>
+        </section>
+      </div>
+      <footer class="settings-foot">
+        <button type="button" id="btn-settings-save" class="tb on">Save</button>
+      </footer>
     </div>
     <div id="toast" class="toast" hidden></div>
     <script type="module" src="/src/main.ts"></script>

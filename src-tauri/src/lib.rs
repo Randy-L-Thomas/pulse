@@ -11,7 +11,7 @@ use tauri::{Emitter, Manager};
 use window::WidthMode;
 
 struct AppState {
-    cfg: Config,
+    cfg: Mutex<Config>,
     probes: ProbeState,
     client: reqwest::Client,
     snapshot: Mutex<Option<Snapshot>>,
@@ -19,7 +19,12 @@ struct AppState {
 
 #[tauri::command]
 fn get_snapshot(state: tauri::State<'_, Arc<AppState>>) -> Snapshot {
-    state.snapshot.lock().unwrap().clone().unwrap_or_else(probes::empty_snapshot)
+    state
+        .snapshot
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(probes::empty_snapshot)
 }
 
 #[tauri::command]
@@ -28,7 +33,8 @@ fn run_action(
     cell_id: String,
     action: String,
 ) -> Result<String, String> {
-    launch::run_action(&state.cfg, &cell_id, &action)
+    let cfg = state.cfg.lock().unwrap().clone();
+    launch::run_action(&cfg, &cell_id, &action)
 }
 
 #[tauri::command]
@@ -38,11 +44,53 @@ fn set_width_mode(
     mode: String,
 ) -> Result<(), String> {
     let win = app.get_webview_window("main").ok_or("no window")?;
+    let cfg = state.cfg.lock().unwrap().clone();
     let m = match mode.as_str() {
         "full" => WidthMode::Full,
         _ => WidthMode::Half,
     };
-    window::dock_and_size(&win, &state.cfg, m)
+    window::dock_and_size(&win, &cfg, m)
+}
+
+#[tauri::command]
+fn get_settings(state: tauri::State<'_, Arc<AppState>>) -> Config {
+    state.cfg.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn save_settings(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    cfg: Config,
+) -> Result<String, String> {
+    config::save_config(&cfg)?;
+    *state.cfg.lock().unwrap() = cfg.clone();
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = window::dock_and_size(&win, &cfg, WidthMode::Half);
+    }
+    Ok(format!("saved {}", config::user_config_path().display()))
+}
+
+#[tauri::command]
+fn apply_preset(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    name: String,
+) -> Result<String, String> {
+    let cfg = config::apply_preset(&name)?;
+    *state.cfg.lock().unwrap() = cfg.clone();
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = window::dock_and_size(&win, &cfg, WidthMode::Half);
+    }
+    Ok(format!("preset {name}"))
+}
+
+#[tauri::command]
+fn app_meta() -> serde_json::Value {
+    serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "config_path": config::user_config_path().display().to_string(),
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -58,7 +106,7 @@ pub fn run() {
         .build()
         .expect("http client");
     let state = Arc::new(AppState {
-        cfg,
+        cfg: Mutex::new(cfg),
         probes: ProbeState::new(),
         client,
         snapshot: Mutex::new(None),
@@ -66,30 +114,43 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(state.clone())
         .setup(move |app| {
             let win = app.get_webview_window("main").expect("main window");
-            let _ = window::dock_and_size(&win, &state.cfg, WidthMode::Half);
+            let cfg = state.cfg.lock().unwrap().clone();
+            let _ = window::dock_and_size(&win, &cfg, WidthMode::Half);
             let clamp_win = win.clone();
-            let clamp_cfg = state.cfg.clone();
+            let loop_state = state.clone();
             win.on_window_event(move |ev| {
                 if matches!(ev, tauri::WindowEvent::Resized(_)) {
-                    window::clamp_resize(&clamp_win, &clamp_cfg);
+                    let cfg = loop_state.cfg.lock().unwrap().clone();
+                    window::clamp_resize(&clamp_win, &cfg);
                 }
             });
             let handle = app.handle().clone();
-            let loop_state = state.clone();
+            let probe_state = state.clone();
             tauri::async_runtime::spawn(async move {
                 loop {
-                    let snap = probes::collect(&loop_state.cfg, &loop_state.probes, &loop_state.client).await;
-                    *loop_state.snapshot.lock().unwrap() = Some(snap.clone());
+                    let cfg = probe_state.cfg.lock().unwrap().clone();
+                    let snap = probes::collect(&cfg, &probe_state.probes, &probe_state.client).await;
+                    *probe_state.snapshot.lock().unwrap() = Some(snap.clone());
                     let _ = handle.emit("snapshot", snap);
                     tokio::time::sleep(Duration::from_secs(2)).await;
                 }
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_snapshot, run_action, set_width_mode])
+        .invoke_handler(tauri::generate_handler![
+            get_snapshot,
+            run_action,
+            set_width_mode,
+            get_settings,
+            save_settings,
+            apply_preset,
+            app_meta
+        ])
         .run(tauri::generate_context!())
         .expect("error while running pulse");
 }

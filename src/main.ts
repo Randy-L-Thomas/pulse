@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { wireSettings } from "./settings";
 
 type Status = "ok" | "degraded" | "down";
 
@@ -48,13 +49,17 @@ const win = getCurrentWindow();
 let pinned = true;
 let menuCell: Cell | null = null;
 let lastNet: NetState | null = null;
+let openedAtStamp = Number.NaN;
+let skipOpenCellId: string | null = null;
+let toastTimer = 0;
 
-function toast(msg: string) {
+function toast(msg: string, ms = 2800) {
   toastEl.textContent = msg;
   toastEl.hidden = false;
-  window.setTimeout(() => {
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => {
     toastEl.hidden = true;
-  }, 2800);
+  }, ms);
 }
 
 function drawSpark(history: number[]) {
@@ -96,7 +101,20 @@ function renderCells(cells: Cell[]) {
     )}</span><span class="read">${escapeHtml(cell.primary)}</span><span class="detail">${escapeHtml(
       cell.detail,
     )}</span>`;
-    btn.addEventListener("click", (ev) => openRadial(ev, cell));
+    btn.addEventListener("pointerup", (ev) => {
+      if (ev.button !== 0) return;
+      const skip = skipOpenCellId === cell.id;
+      skipOpenCellId = null;
+      if (skip) return;
+      openRadial(ev, cell);
+    });
+    btn.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      const skip = skipOpenCellId === cell.id;
+      skipOpenCellId = null;
+      if (skip) return;
+      openRadial(ev, cell);
+    });
     cellsEl.appendChild(btn);
   }
 }
@@ -105,13 +123,41 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 }
 
+function closestFrom(target: EventTarget | null, selector: string): Element | null {
+  const node = target as Node | null;
+  const el = node instanceof Element ? node : node?.parentElement;
+  return el?.closest(selector) ?? null;
+}
+
+function setTitlebarDrag(enabled: boolean) {
+  for (const el of document.querySelectorAll<HTMLElement>(".titlebar, .mark, .clock")) {
+    if (enabled) el.setAttribute("data-tauri-drag-region", "");
+    else el.removeAttribute("data-tauri-drag-region");
+  }
+  document.body.classList.toggle("radial-open", !enabled);
+}
+
 function openRadial(ev: MouseEvent, cell: Cell) {
-  ev.stopPropagation();
+  openedAtStamp = ev.timeStamp;
   menuCell = cell;
   radial.hidden = false;
   radial.style.left = `${ev.clientX}px`;
   radial.style.top = `${ev.clientY}px`;
+  setTitlebarDrag(false);
+  const hasInfo = cell.actions.some((a) => a.id === "info" && a.enabled);
+  const hasRestart = cell.actions.some((a) => a.id === "restart" && a.enabled);
   for (const spoke of radial.querySelectorAll<HTMLButtonElement>(".spoke")) {
+    const slot = spoke.dataset.slot ?? spoke.dataset.action ?? "";
+    if (!spoke.dataset.slot) spoke.dataset.slot = slot;
+    if (slot === "restart") {
+      if (hasInfo && !hasRestart) {
+        spoke.dataset.action = "info";
+        spoke.textContent = "Info";
+      } else {
+        spoke.dataset.action = "restart";
+        spoke.textContent = "Restart";
+      }
+    }
     const action = cell.actions.find((a) => a.id === spoke.dataset.action);
     spoke.disabled = !action?.enabled;
   }
@@ -120,6 +166,7 @@ function openRadial(ev: MouseEvent, cell: Cell) {
 function closeRadial() {
   radial.hidden = true;
   menuCell = null;
+  setTitlebarDrag(true);
 }
 
 function renderNet(net: NetState) {
@@ -137,7 +184,17 @@ function applySnapshot(snap: Snapshot) {
   renderCells(snap.cells);
 }
 
+function cellReadout(cell: Cell): string {
+  return (cell.copy_text || `${cell.label} ${cell.primary} ${cell.detail}`).trim();
+}
+
 async function runAction(cell: Cell, action: string) {
+  if (action === "info") {
+    const text = cellReadout(cell);
+    await navigator.clipboard.writeText(text);
+    toast(text, 4500);
+    return;
+  }
   if (action === "copy") {
     await navigator.clipboard.writeText(cell.copy_text || cell.primary);
     toast("copied");
@@ -175,11 +232,24 @@ radial.addEventListener("click", async (ev) => {
   await runAction(cell, action);
 });
 
-document.addEventListener("click", (ev) => {
-  if (!radial.hidden && !(ev.target as HTMLElement).closest(".radial, .cell")) closeRadial();
+document.addEventListener("contextmenu", (ev) => {
+  ev.preventDefault();
+});
+
+window.addEventListener("pointerdown", (ev) => {
+  skipOpenCellId = null;
+  if (radial.hidden) return;
+  if (ev.timeStamp === openedAtStamp) return;
+  if (closestFrom(ev.target, ".radial")) return;
+  skipOpenCellId = menuCell?.id ?? null;
+  closeRadial();
 });
 document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") closeRadial();
+  if (ev.key === "Escape") {
+    closeRadial();
+    const settings = document.getElementById("settings");
+    if (settings && !settings.hidden) settings.hidden = true;
+  }
 });
 
 document.querySelector(".trace")!.addEventListener("click", async (ev) => {
@@ -204,3 +274,4 @@ listen<Snapshot>("snapshot", (ev) => applySnapshot(ev.payload));
 invoke<Snapshot>("get_snapshot")
   .then(applySnapshot)
   .catch((err) => toast(String(err)));
+wireSettings(toast);
