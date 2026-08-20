@@ -1,6 +1,10 @@
 # pulse
 
-Strip health dashboard for a 1920×440 monitor. Tauri 2 — not Electron.
+Native Windows health strip for a 1920×440 monitor. **Tauri 2 — not Electron.**
+
+Pulse docks on the short panel as a 960×440 left half (Google Translate can keep the right) or full 1920. It watches internet path, CPU / RAM / GPU, local HTTP services, and process working-set (Cursor, Chrome, etc.). Click a cell for Open / Start / Stop. Pin keeps it on top.
+
+User config is `%APPDATA%\pulse\probes.toml`. First run copies the TK421 preset if `C:\dev\cam` exists, otherwise generic (Net + host meters). **Set** in the titlebar is Settings: cells, presets, Start with Windows, Check now.
 
 ```powershell
 cd C:\dev\pulse
@@ -8,9 +12,7 @@ npm install
 npm run tauri dev
 ```
 
-Starts at 960×440 on the left (Translate keeps the right). **Half** / **Full** snaps width. **Set** opens Settings.
-
-User config lives in `%APPDATA%\pulse\probes.toml` (created on first run). Presets: TK421 (this machine) and generic (friends). First run copies TK421 if `C:\dev\cam` exists, otherwise generic.
+Installed copy lives in `%LOCALAPPDATA%\pulse\`.
 
 ## Release (Windows)
 
