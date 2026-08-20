@@ -131,17 +131,8 @@ async fn translate_text(
     to: String,
     enrich: bool,
 ) -> Result<translate::TranslateOut, String> {
-    let ui = state.ui.lock().unwrap().clone();
-    translate::translate(
-        &state.ollama,
-        &ui.ollama_url,
-        &ui.ollama_model,
-        &from,
-        &to,
-        &source,
-        enrich,
-    )
-    .await
+    let url = state.ui.lock().unwrap().ollama_url.clone();
+    translate::translate(&state.ollama, &url, &from, &to, &source, enrich).await
 }
 
 #[tauri::command]
