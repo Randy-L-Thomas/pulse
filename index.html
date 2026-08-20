@@ -35,11 +35,13 @@
       <aside id="modules" hidden>
         <nav class="mod-switch">
           <button type="button" class="tb on" data-mod="translate">Translate</button>
+          <button type="button" class="tb" data-mod="ocr">OCR</button>
           <button type="button" class="tb" data-mod="chat">Chat</button>
         </nav>
         <section id="mod-translate" class="mod-pane">
           <div class="mod-row">
             <select id="mt-from" title="From">
+              <option value="auto">Detect</option>
               <option value="es">Spanish</option>
               <option value="en">English</option>
               <option value="fr">French</option>
@@ -47,7 +49,7 @@
               <option value="de">German</option>
               <option value="ar">Arabic</option>
             </select>
-            <button type="button" id="mt-swap" class="tb" title="Swap">↔</button>
+            <button type="button" id="mt-swap" class="tb" title="Swap languages">↔</button>
             <select id="mt-to" title="To">
               <option value="en">English</option>
               <option value="es">Spanish</option>
@@ -56,19 +58,24 @@
               <option value="de">German</option>
               <option value="ar">Arabic</option>
             </select>
-            <label class="mod-check"><input id="mt-enrich" type="checkbox" /> Enrich</label>
-            <button type="button" id="mt-go" class="tb on">Translate</button>
-          </div>
-          <div class="mod-row">
-            <select id="mt-win" class="wide"></select>
-            <button type="button" id="mt-bind" class="tb">Bind</button>
-            <button type="button" id="mt-ocr" class="tb">OCR</button>
+            <button type="button" id="mt-copy" class="tb">Copy</button>
+            <button type="button" id="mt-clear" class="tb">Clear</button>
             <span id="mt-status" class="hint"></span>
           </div>
           <div class="mt-cols">
-            <textarea id="mt-src" placeholder="source"></textarea>
-            <textarea id="mt-dst" placeholder="translation" readonly></textarea>
+            <textarea id="mt-src" placeholder="Type or paste"></textarea>
+            <textarea id="mt-dst" placeholder="Translation" readonly></textarea>
           </div>
+        </section>
+        <section id="mod-ocr" class="mod-pane" hidden>
+          <div class="mod-row">
+            <select id="ocr-win" class="wide"></select>
+            <button type="button" id="ocr-bind" class="tb">Bind</button>
+            <button type="button" id="ocr-go" class="tb on">OCR</button>
+            <button type="button" id="ocr-to-mt" class="tb">Translate</button>
+            <span id="ocr-status" class="hint"></span>
+          </div>
+          <textarea id="ocr-out" class="ocr-out" placeholder="WhatsApp capture"></textarea>
         </section>
         <section id="mod-chat" class="mod-pane" hidden>
           <div class="mod-row">

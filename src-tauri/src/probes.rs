@@ -938,12 +938,22 @@ fn probe_file(cfg: &Config, spec: &FileCfg) -> Cell {
             status = Status::Down;
             primary = "fail".into();
             if let Some(checks) = json.get("checks").and_then(|c| c.as_array()) {
-                if let Some(bad) = checks.iter().find(|c| c.get("status").and_then(|s| s.as_str()) != Some("ok")) {
-                    detail = bad
+                if let Some(bad) = checks.iter().find(|c| {
+                    !matches!(c.get("status").and_then(|s| s.as_str()), Some("ok"))
+                }) {
+                    primary = bad
                         .get("name")
                         .and_then(|n| n.as_str())
-                        .unwrap_or("check failed")
+                        .unwrap_or("fail")
                         .to_string();
+                    detail = bad
+                        .get("detail")
+                        .and_then(|n| n.as_str())
+                        .or_else(|| bad.get("name").and_then(|n| n.as_str()))
+                        .unwrap_or("check failed")
+                        .chars()
+                        .take(48)
+                        .collect();
                 }
             }
         } else {
@@ -953,11 +963,9 @@ fn probe_file(cfg: &Config, spec: &FileCfg) -> Cell {
     }
     if let Some(field) = &spec.string_field {
         let val = json.get(field).and_then(|v| v.as_str()).unwrap_or("unknown");
-        let ok_val = spec.ok_value.as_deref().unwrap_or("healthy");
+        let ok_val = spec.ok_value.as_deref().unwrap_or("ok");
         primary = val.to_string();
-        if val != ok_val {
-            status = Status::Degraded;
-        }
+        status = overall_status(val, ok_val);
         if let Some(sum) = json.get("operator_summary").and_then(|v| v.as_str()) {
             detail = sum.chars().take(42).collect();
         } else {
@@ -977,6 +985,19 @@ fn probe_file(cfg: &Config, spec: &FileCfg) -> Cell {
         detail: detail.clone(),
         copy_text: format!("{} {} {}", spec.label, spec.path, detail),
         actions,
+    }
+}
+
+fn overall_status(val: &str, ok_val: &str) -> Status {
+    let v = val.trim().to_ascii_lowercase();
+    let ok = ok_val.trim().to_ascii_lowercase();
+    let happy = v == ok || matches!(v.as_str(), "ok" | "healthy" | "pass" | "true");
+    if happy {
+        Status::Ok
+    } else if matches!(v.as_str(), "failed" | "fail" | "down" | "error" | "crit") {
+        Status::Down
+    } else {
+        Status::Degraded
     }
 }
 
@@ -1230,6 +1251,76 @@ mod tests {
         let ice_ids: Vec<&str> = ice.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(ice_ids, ["open", "start", "stop", "restart", "copy"]);
         assert!(!ice.iter().any(|a| a.id == "info"));
+    }
+
+    #[test]
+    fn file_probe_treats_overall_ok_as_ok_even_if_config_says_healthy() {
+        let dir = std::env::temp_dir().join(format!("pulse-fp-ok-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ws.json");
+        std::fs::write(&path, r#"{"overall":"ok","operator_summary":"path ok"}"#).unwrap();
+        let mut cfg = crate::config::parse_config(crate::config::PRESET_DEFAULT).unwrap();
+        cfg.stale_secs = 60 * 60 * 24 * 365;
+        cfg.file = vec![crate::config::FileCfg {
+            id: "ws".into(),
+            label: "ws-ops".into(),
+            path: path.to_string_lossy().into_owned(),
+            bool_field: None,
+            string_field: Some("overall".into()),
+            ok_value: Some("healthy".into()),
+            open: None,
+        }];
+        let cell = super::probe_file(&cfg, &cfg.file[0]);
+        assert!(matches!(cell.status, super::Status::Ok), "{:?}", cell.primary);
+        assert_eq!(cell.primary, "ok");
+    }
+
+    #[test]
+    fn file_probe_maps_failed_overall_to_down() {
+        let dir = std::env::temp_dir().join(format!("pulse-fp-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ws.json");
+        std::fs::write(&path, r#"{"overall":"failed"}"#).unwrap();
+        let mut cfg = crate::config::parse_config(crate::config::PRESET_DEFAULT).unwrap();
+        cfg.stale_secs = 60 * 60 * 24 * 365;
+        cfg.file = vec![crate::config::FileCfg {
+            id: "ws".into(),
+            label: "ws-ops".into(),
+            path: path.to_string_lossy().into_owned(),
+            bool_field: None,
+            string_field: Some("overall".into()),
+            ok_value: Some("ok".into()),
+            open: None,
+        }];
+        let cell = super::probe_file(&cfg, &cfg.file[0]);
+        assert!(matches!(cell.status, super::Status::Down));
+    }
+
+    #[test]
+    fn file_probe_shows_failed_check_name() {
+        let dir = std::env::temp_dir().join(format!("pulse-fp-xsiam-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("x.json");
+        std::fs::write(
+            &path,
+            r#"{"checks_ok":false,"checks":[{"name":"auth_selftest","status":"failed","detail":"op read failed"}]}"#,
+        )
+        .unwrap();
+        let mut cfg = crate::config::parse_config(crate::config::PRESET_DEFAULT).unwrap();
+        cfg.stale_secs = 60 * 60 * 24 * 365;
+        cfg.file = vec![crate::config::FileCfg {
+            id: "xsiam".into(),
+            label: "xsiam-ops".into(),
+            path: path.to_string_lossy().into_owned(),
+            bool_field: Some("checks_ok".into()),
+            string_field: None,
+            ok_value: None,
+            open: None,
+        }];
+        let cell = super::probe_file(&cfg, &cfg.file[0]);
+        assert!(matches!(cell.status, super::Status::Down));
+        assert_eq!(cell.primary, "auth_selftest");
+        assert!(cell.detail.contains("op read"));
     }
 }
 

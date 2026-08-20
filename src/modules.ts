@@ -13,31 +13,37 @@ export type UiState = {
 type WindowInfo = { title: string; hwnd: number };
 type ToastFn = (msg: string, ms?: number) => void;
 
+const MODS = ["translate", "ocr", "chat"];
+
 export function wireModules(toast: ToastFn) {
   const modules = document.getElementById("modules") as HTMLElement;
   const mtFrom = document.getElementById("mt-from") as HTMLSelectElement;
   const mtTo = document.getElementById("mt-to") as HTMLSelectElement;
-  const mtEnrich = document.getElementById("mt-enrich") as HTMLInputElement;
   const mtSrc = document.getElementById("mt-src") as HTMLTextAreaElement;
   const mtDst = document.getElementById("mt-dst") as HTMLTextAreaElement;
-  const mtWin = document.getElementById("mt-win") as HTMLSelectElement;
   const mtStatus = document.getElementById("mt-status") as HTMLElement;
+  const ocrWin = document.getElementById("ocr-win") as HTMLSelectElement;
+  const ocrOut = document.getElementById("ocr-out") as HTMLTextAreaElement;
+  const ocrStatus = document.getElementById("ocr-status") as HTMLElement;
   const chatModel = document.getElementById("chat-model") as HTMLSelectElement;
   const chatLog = document.getElementById("chat-log") as HTMLElement;
   const chatIn = document.getElementById("chat-in") as HTMLInputElement;
   const chatStatus = document.getElementById("chat-status") as HTMLElement;
   const messages: { role: string; content: string }[] = [];
   let ui: UiState | null = null;
+  let mtTimer = 0;
+  let mtGen = 0;
 
   function showMod(id: string) {
+    const next = MODS.includes(id) ? id : "translate";
     for (const pane of modules.querySelectorAll<HTMLElement>(".mod-pane")) {
-      pane.hidden = pane.id !== `mod-${id}`;
+      pane.hidden = pane.id !== `mod-${next}`;
     }
     for (const btn of modules.querySelectorAll<HTMLButtonElement>("[data-mod]")) {
-      btn.classList.toggle("on", btn.dataset.mod === id);
+      btn.classList.toggle("on", btn.dataset.mod === next);
     }
     if (ui) {
-      ui.last_module = id;
+      ui.last_module = next;
       void persist();
     }
   }
@@ -46,9 +52,8 @@ export function wireModules(toast: ToastFn) {
     if (!ui) return;
     ui.mt_from = mtFrom.value;
     ui.mt_to = mtTo.value;
-    ui.mt_enrich = mtEnrich.checked;
     ui.ollama_model = chatModel.value;
-    ui.wa_title = mtWin.value || ui.wa_title;
+    ui.wa_title = ocrWin.value || ui.wa_title;
     try {
       await invoke("save_ui", { ui });
     } catch (e) {
@@ -60,7 +65,7 @@ export function wireModules(toast: ToastFn) {
     try {
       const list = await invoke<WindowInfo[]>("list_app_windows");
       const prev = ui?.wa_title || "WhatsApp";
-      mtWin.replaceChildren();
+      ocrWin.replaceChildren();
       const seen = new Set<string>();
       for (const w of list) {
         if (seen.has(w.title)) continue;
@@ -68,19 +73,21 @@ export function wireModules(toast: ToastFn) {
         const opt = document.createElement("option");
         opt.value = w.title;
         opt.textContent = w.title.slice(0, 80);
-        mtWin.appendChild(opt);
+        ocrWin.appendChild(opt);
       }
-      const hit = [...mtWin.options].find((o) => o.value.toLowerCase().includes(prev.toLowerCase()) || o.value === prev);
-      if (hit) mtWin.value = hit.value;
+      const hit = [...ocrWin.options].find(
+        (o) => o.value.toLowerCase().includes(prev.toLowerCase()) || o.value === prev,
+      );
+      if (hit) ocrWin.value = hit.value;
       else if (prev) {
         const opt = document.createElement("option");
         opt.value = prev;
         opt.textContent = prev;
-        mtWin.insertBefore(opt, mtWin.firstChild);
-        mtWin.value = prev;
+        ocrWin.insertBefore(opt, ocrWin.firstChild);
+        ocrWin.value = prev;
       }
     } catch (e) {
-      mtStatus.textContent = String(e);
+      ocrStatus.textContent = String(e);
     }
   }
 
@@ -102,50 +109,110 @@ export function wireModules(toast: ToastFn) {
     }
   }
 
-  modules.querySelectorAll<HTMLButtonElement>("[data-mod]").forEach((btn) => {
-    btn.addEventListener("click", () => showMod(btn.dataset.mod || "translate"));
-  });
-  document.getElementById("mt-swap")!.addEventListener("click", () => {
-    const a = mtFrom.value;
-    mtFrom.value = mtTo.value;
-    mtTo.value = a;
-    void persist();
-  });
-  document.getElementById("mt-go")!.addEventListener("click", async () => {
+  async function runTranslate() {
+    const source = mtSrc.value;
+    if (!source.trim()) {
+      mtDst.value = "";
+      mtStatus.textContent = "";
+      return;
+    }
+    const gen = ++mtGen;
     mtStatus.textContent = "…";
     try {
       await persist();
       const out = await invoke<{ text: string; cached: boolean; engine: string }>("translate_text", {
-        source: mtSrc.value,
+        source,
         from: mtFrom.value,
         to: mtTo.value,
-        enrich: mtEnrich.checked,
+        enrich: false,
       });
+      if (gen !== mtGen) return;
       mtDst.value = out.text;
       mtStatus.textContent = out.cached ? "cache" : out.engine;
     } catch (e) {
+      if (gen !== mtGen) return;
       mtStatus.textContent = String(e);
     }
+  }
+
+  function scheduleTranslate() {
+    window.clearTimeout(mtTimer);
+    mtTimer = window.setTimeout(() => void runTranslate(), 450);
+  }
+
+  modules.querySelectorAll<HTMLButtonElement>("[data-mod]").forEach((btn) => {
+    btn.addEventListener("click", () => showMod(btn.dataset.mod || "translate"));
   });
-  document.getElementById("mt-bind")!.addEventListener("click", async () => {
-    await loadWindows();
-    if (ui && mtWin.value) {
-      ui.wa_title = mtWin.value;
-      await persist();
-      mtStatus.textContent = `bound ${mtWin.value.slice(0, 40)}`;
+  document.getElementById("mt-swap")!.addEventListener("click", () => {
+    const from = mtFrom.value;
+    const to = mtTo.value;
+    mtFrom.value = to;
+    mtTo.value = from === "auto" ? (to === "en" ? "es" : "en") : from;
+    const src = mtSrc.value;
+    mtSrc.value = mtDst.value;
+    mtDst.value = src;
+    void persist();
+    void runTranslate();
+  });
+  document.getElementById("mt-copy")!.addEventListener("click", async () => {
+    const text = mtDst.value;
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      mtStatus.textContent = "copied";
+    } catch (e) {
+      toast(String(e));
     }
   });
-  document.getElementById("mt-ocr")!.addEventListener("click", async () => {
-    mtStatus.textContent = "ocr…";
+  document.getElementById("mt-clear")!.addEventListener("click", () => {
+    mtGen += 1;
+    mtSrc.value = "";
+    mtDst.value = "";
+    mtStatus.textContent = "";
+  });
+  mtFrom.addEventListener("change", () => {
+    void persist();
+    void runTranslate();
+  });
+  mtTo.addEventListener("change", () => {
+    void persist();
+    void runTranslate();
+  });
+  mtSrc.addEventListener("input", scheduleTranslate);
+  mtSrc.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
+      ev.preventDefault();
+      void runTranslate();
+    }
+  });
+  document.getElementById("ocr-bind")!.addEventListener("click", async () => {
+    await loadWindows();
+    if (ui && ocrWin.value) {
+      ui.wa_title = ocrWin.value;
+      await persist();
+      ocrStatus.textContent = `bound ${ocrWin.value.slice(0, 40)}`;
+    }
+  });
+  document.getElementById("ocr-go")!.addEventListener("click", async () => {
+    ocrStatus.textContent = "ocr…";
     try {
       await persist();
       const text = await invoke<string>("capture_ocr");
-      mtSrc.value = text;
-      mtStatus.textContent = "ocr ok";
-      if (text.trim()) document.getElementById("mt-go")!.click();
+      ocrOut.value = text;
+      ocrStatus.textContent = text.trim() ? "ok" : "empty";
     } catch (e) {
-      mtStatus.textContent = String(e);
+      ocrStatus.textContent = String(e);
     }
+  });
+  document.getElementById("ocr-to-mt")!.addEventListener("click", () => {
+    const text = ocrOut.value.trim();
+    if (!text) {
+      ocrStatus.textContent = "nothing to translate";
+      return;
+    }
+    mtSrc.value = text;
+    showMod("translate");
+    void runTranslate();
   });
   document.getElementById("chat-refresh")!.addEventListener("click", () => void loadModels());
   document.getElementById("chat-send")!.addEventListener("click", async () => {
@@ -182,10 +249,10 @@ export function wireModules(toast: ToastFn) {
   invoke<UiState>("get_ui")
     .then(async (s) => {
       ui = s;
-      mtFrom.value = s.mt_from || "es";
+      mtFrom.value = s.mt_from === "auto" || s.mt_from ? s.mt_from : "es";
+      if (![...mtFrom.options].some((o) => o.value === mtFrom.value)) mtFrom.value = "es";
       mtTo.value = s.mt_to || "en";
-      mtEnrich.checked = !!s.mt_enrich;
-      showMod(s.last_module === "chat" ? "chat" : "translate");
+      showMod(s.last_module);
       await loadWindows();
       await loadModels();
     })

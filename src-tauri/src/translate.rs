@@ -61,6 +61,11 @@ pub async fn translate(
             engine: "empty".into(),
         });
     }
+    let from = if from == "auto" {
+        detect_lang(src)
+    } else {
+        from
+    };
     let k = key(from, to, src);
     let mut cache = load_cache();
     if !enrich {
@@ -73,24 +78,36 @@ pub async fn translate(
         }
     }
     let mut out = mt_ollama(client, ollama_url, model, from, to, src).await?;
-    let engine = if enrich {
-        match enrich_ollama(client, ollama_url, model, from, to, src, &out).await {
-            Ok(polished) if !polished.trim().is_empty() => {
+    if enrich {
+        if let Ok(polished) = enrich_ollama(client, ollama_url, model, from, to, src, &out).await {
+            if !polished.trim().is_empty() {
                 out = polished;
-                "ollama+enrich".into()
             }
-            _ => "ollama".into(),
         }
-    } else {
-        "ollama".into()
-    };
+    }
     cache.entries.insert(k, out.clone());
     save_cache(&cache);
     Ok(TranslateOut {
         text: out,
         cached: false,
-        engine,
+        engine: format!("{from}→{to}"),
     })
+}
+
+pub fn detect_lang(text: &str) -> &'static str {
+    let t = text.to_lowercase();
+    let marks = t.chars().filter(|c| "áéíóúñü¿¡".contains(*c)).count();
+    let es = ["qué", "hola", "gracias", "por favor", "buenos", "usted", "está", "también", "mañana"];
+    let en = ["the ", " and ", " you ", " that ", " with ", " this "];
+    let es_hits = es.iter().filter(|w| t.contains(*w)).count() + marks;
+    let en_hits = en.iter().filter(|w| t.contains(*w)).count();
+    if es_hits > en_hits {
+        "es"
+    } else if en_hits > 0 {
+        "en"
+    } else {
+        "es"
+    }
 }
 
 fn lang_name(code: &str) -> &'static str {
@@ -189,4 +206,19 @@ async fn generate(
         .unwrap_or("")
         .trim()
         .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detect_lang;
+
+    #[test]
+    fn detects_spanish_from_marks_and_words() {
+        assert_eq!(detect_lang("¿Cómo estás? Gracias por el mensaje."), "es");
+    }
+
+    #[test]
+    fn detects_english_from_common_words() {
+        assert_eq!(detect_lang("The cat sat with you and that box."), "en");
+    }
 }
