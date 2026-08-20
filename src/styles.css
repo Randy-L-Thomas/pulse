@@ -440,6 +440,14 @@ body.full #modules:not([hidden]) {
   height: 100%;
 }
 
+.ocr-out {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .chat-log {
   flex: 1;
   min-height: 0;
