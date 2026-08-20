@@ -2,6 +2,8 @@ node_modules
 dist
 src-tauri/target
 src-tauri/gen
+src-tauri/*.key
+src-tauri/*.key.pub
 src-tauri/icons/android
 src-tauri/icons/ios
 src-tauri/icons/Square*.png
@@ -12,3 +14,4 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+pulse-*.zip

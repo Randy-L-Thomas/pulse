@@ -1,0 +1,37 @@
+# Generic Pulse defaults. Copied to %APPDATA%\pulse\probes.toml on first run.
+# Friends: Net, Path, CPU, RAM, GPU. Add HTTP or process watches in Settings.
+
+launch_allow = []
+
+height = 440
+half_width = 960
+full_width = 1920
+monitor_width = 1920
+monitor_height = 440
+stale_secs = 1800
+
+[show]
+path = true
+cpu = true
+memory = true
+gpu = true
+
+[net]
+host = "google.com"
+https_url = "https://www.google.com"
+history = 48
+
+[path]
+dns_host = "google.com"
+
+[cpu]
+warn_pct = 80.0
+crit_pct = 95.0
+
+[memory]
+warn_pct = 80.0
+crit_pct = 95.0
+
+[gpu]
+warn_pct = 80.0
+crit_pct = 95.0

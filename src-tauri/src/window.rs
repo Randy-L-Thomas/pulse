@@ -30,17 +30,32 @@ pub fn dock_and_size(window: &WebviewWindow, cfg: &Config, mode: WidthMode) -> R
         width: cfg.half_width.min(max_w),
         height: cfg.height,
     })));
+    let _ = window.set_always_on_top(true);
+    let _ = window.unminimize();
+    let _ = window.set_focus();
     Ok(())
 }
 
 pub fn strip_origin(window: &WebviewWindow, cfg: &Config) -> ((i32, i32), u32) {
     let monitors = window.available_monitors().unwrap_or_default();
+    // Prefer the short 1920-wide panel (Windows may report 440 as 450).
+    let mut best: Option<(i32, i32, u32, u32)> = None;
     for mon in &monitors {
         let size = mon.size();
-        if size.width == cfg.monitor_width && size.height == cfg.monitor_height {
-            let pos = mon.position();
-            return ((pos.x, pos.y), size.width);
+        if size.width != cfg.monitor_width || size.height > 500 {
+            continue;
         }
+        let pos = mon.position();
+        let better = match best {
+            None => true,
+            Some((_, _, _, h)) => size.height <= h,
+        };
+        if better {
+            best = Some((pos.x, pos.y, size.width, size.height));
+        }
+    }
+    if let Some((x, y, w, _)) = best {
+        return ((x, y), w);
     }
     if let Ok(Some(mon)) = window.primary_monitor() {
         let pos = mon.position();

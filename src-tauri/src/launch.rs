@@ -1,4 +1,4 @@
-use crate::config::{Config, HttpCfg};
+use crate::config::{Config, HttpCfg, ProcessCfg};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -11,12 +11,15 @@ const DETACHED_PROCESS: u32 = 0x00000008;
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 
 pub fn run_action(cfg: &Config, cell_id: &str, action: &str) -> Result<String, String> {
-    if matches!(cell_id, "path" | "disk" | "net") {
+    if matches!(cell_id, "path" | "cpu" | "ram" | "gpu" | "net") {
         return Err("no launch action".into());
+    }
+    if let Some(spec) = cfg.process.iter().find(|p| p.id == cell_id) {
+        return process_action(spec, action);
     }
 
     if let Some(spec) = cfg.http.iter().find(|h| h.id == cell_id) {
-        return http_action(spec, action);
+        return http_action(spec, action, &cfg.launch_allow);
     }
     if let Some(spec) = cfg.file.iter().find(|f| f.id == cell_id) {
         return match action {
@@ -27,7 +30,19 @@ pub fn run_action(cfg: &Config, cell_id: &str, action: &str) -> Result<String, S
     Err(format!("unknown cell {cell_id}"))
 }
 
-fn http_action(spec: &HttpCfg, action: &str) -> Result<String, String> {
+fn process_action(spec: &ProcessCfg, action: &str) -> Result<String, String> {
+    match action {
+        "open" => {
+            let path = crate::probes::process_open_path(spec).ok_or("exe not found")?;
+            open::that(&path).map_err(|e| e.to_string())?;
+            Ok(format!("opened {}", path.display()))
+        }
+        "stop" | "restart" => Err("won't stop this process from Pulse".into()),
+        _ => Err("no launch action".into()),
+    }
+}
+
+fn http_action(spec: &HttpCfg, action: &str, allow: &[String]) -> Result<String, String> {
     match action {
         "open" => {
             if let Some(url) = &spec.open {
@@ -47,6 +62,7 @@ fn http_action(spec: &HttpCfg, action: &str) -> Result<String, String> {
             spec.start_cwd.as_deref(),
             spec.task.as_deref(),
             true,
+            allow,
         ),
         "stop" => spawn_cli(
             spec.stop_program.as_deref().ok_or("no stop")?,
@@ -54,6 +70,7 @@ fn http_action(spec: &HttpCfg, action: &str) -> Result<String, String> {
             None,
             spec.task.as_deref(),
             false,
+            allow,
         ),
         "restart" => spawn_cli(
             spec.restart_program.as_deref().ok_or("no restart")?,
@@ -61,6 +78,7 @@ fn http_action(spec: &HttpCfg, action: &str) -> Result<String, String> {
             spec.start_cwd.as_deref(),
             spec.task.as_deref(),
             false,
+            allow,
         ),
         _ => Err(format!("unknown action {action}")),
     }
@@ -91,8 +109,9 @@ fn spawn_cli(
     cwd: Option<&str>,
     task: Option<&str>,
     detach: bool,
+    allow: &[String],
 ) -> Result<String, String> {
-    allow_program(program)?;
+    allow_program(program, allow)?;
     let resolved = resolve_program(program);
     let mut cmd = Command::new(&resolved);
     cmd.args(args);
@@ -163,17 +182,10 @@ fn resolve_program(program: &str) -> String {
     program.to_string()
 }
 
-fn allow_program(program: &str) -> Result<(), String> {
-    let base = program
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(program)
-        .trim_end_matches(".exe")
-        .trim_end_matches(".cmd")
-        .trim_end_matches(".CMD")
-        .trim_end_matches(".bat");
-    match base.to_ascii_lowercase().as_str() {
-        "cam" | "ice" | "npm" => Ok(()),
-        _ => Err(format!("program {program} is not on the allow list")),
+fn allow_program(program: &str, allow: &[String]) -> Result<(), String> {
+    if crate::config::program_allowed(program, allow) {
+        Ok(())
+    } else {
+        Err(format!("program {program} is not on the allow list"))
     }
 }
