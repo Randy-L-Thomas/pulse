@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>pulse</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="titlebar" data-tauri-drag-region>
+        <span class="mark" data-tauri-drag-region>PULSE</span>
+        <span id="clock" class="clock" data-tauri-drag-region></span>
+        <div class="title-actions">
+          <button type="button" id="btn-half" class="tb" title="Half width — leave Translate on the right">Half</button>
+          <button type="button" id="btn-full" class="tb" title="Full strip width">Full</button>
+          <button type="button" id="btn-pin" class="tb on" title="Always on top" aria-pressed="true">Pin</button>
+          <button type="button" id="btn-min" class="tb ico" title="Minimize">–</button>
+          <button type="button" id="btn-close" class="tb ico" title="Close">×</button>
+        </div>
+      </header>
+      <main class="body">
+        <section class="trace" aria-label="Internet latency">
+          <div class="trace-meta">
+            <span class="trace-label">NET</span>
+            <span id="net-primary" class="trace-read">—</span>
+            <span id="net-detail" class="trace-sub"></span>
+          </div>
+          <canvas id="spark" width="560" height="120"></canvas>
+        </section>
+        <section id="cells" class="cells" aria-label="Systems"></section>
+      </main>
+    </div>
+    <div id="radial" class="radial" hidden>
+      <div class="radial-disc"></div>
+      <button type="button" class="spoke" data-action="open" style="--a: -90deg">Open</button>
+      <button type="button" class="spoke" data-action="start" style="--a: -18deg">Start</button>
+      <button type="button" class="spoke" data-action="stop" style="--a: 54deg">Stop</button>
+      <button type="button" class="spoke" data-action="restart" style="--a: 126deg">Restart</button>
+      <button type="button" class="spoke" data-action="copy" style="--a: 198deg">Copy</button>
+    </div>
+    <div id="toast" class="toast" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,81 @@
+# Pulse v1 probe targets. Edit paths/URLs here — no rebuild required after restart.
+
+height = 440
+half_width = 960
+full_width = 1920
+monitor_width = 1920
+monitor_height = 440
+stale_secs = 1800
+
+[net]
+host = "google.com"
+https_url = "https://www.google.com"
+history = 48
+
+[path]
+dns_host = "google.com"
+
+[disk]
+mount = "C:\\"
+warn_pct = 15.0
+crit_pct = 5.0
+
+[[http]]
+id = "ice"
+label = "ICE"
+url = "http://127.0.0.1:3201/api/ping"
+also = "http://127.0.0.1:5273/"
+open = "http://127.0.0.1:5273"
+start_program = "ice"
+start_args = ["start"]
+stop_program = "ice"
+stop_args = ["stop"]
+restart_program = "ice"
+restart_args = ["restart"]
+task = "ice-sa-app"
+
+[[http]]
+id = "cam"
+label = "CAM"
+url = "http://127.0.0.1:3001/api/health"
+also = "http://127.0.0.1:5173/"
+open = "http://127.0.0.1:5173"
+open_fallback = "http://127.0.0.1:3001/api/health"
+start_program = "CAM"
+start_args = ["start"]
+stop_program = "CAM"
+stop_args = ["stop"]
+restart_program = "CAM"
+restart_args = ["restart"]
+task = "cam-api"
+
+[[http]]
+id = "cam-mcp"
+label = "cam-mcp"
+url = "http://127.0.0.1:3101/health"
+open = "http://127.0.0.1:3101/health"
+start_program = "npm"
+start_args = ["run", "mcp:http"]
+start_cwd = "C:\\dev\\cam-mcp"
+stdio_match = "cam-mcp"
+
+[[http]]
+id = "ollama"
+label = "Ollama"
+url = "http://127.0.0.1:11434/api/tags"
+open = "http://127.0.0.1:11434"
+
+[[file]]
+id = "xsiam"
+label = "xsiam-ops"
+path = "C:\\dev\\xsiam-ops\\out\\last-xsiam-health-detail.json"
+bool_field = "checks_ok"
+open = "http://127.0.0.1:5273/"
+
+[[file]]
+id = "ws"
+label = "ws-ops"
+path = "C:\\dev\\ws-ops\\out\\last-ws-health-detail.json"
+string_field = "overall"
+ok_value = "healthy"
+open = "http://127.0.0.1:5273/"
