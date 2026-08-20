@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
 
 export type UtilCfg = { warn_pct: number; crit_pct: number };
 export type HttpCfg = {
@@ -98,6 +99,11 @@ export function wireSettings(toast: ToastFn) {
     (document.getElementById("set-allow") as HTMLInputElement).value = (s.launch_allow || []).join(", ");
     const pinOn = document.getElementById("btn-pin")?.classList.contains("on") ?? true;
     document.getElementById("set-pin")!.classList.toggle("on", pinOn);
+    try {
+      (document.getElementById("set-autostart") as HTMLInputElement).checked = await autostartEnabled();
+    } catch {
+      (document.getElementById("set-autostart") as HTMLInputElement).checked = false;
+    }
     renderHttp(s.http);
     renderProcs(s.process);
     const meta = await invoke<{ version: string; config_path: string }>("app_meta");
@@ -233,6 +239,16 @@ export function wireSettings(toast: ToastFn) {
       const pinOn = document.getElementById("btn-pin")!.classList.contains("on");
       document.getElementById("set-pin")!.classList.toggle("on", pinOn);
     }, 50);
+  });
+  document.getElementById("set-autostart")!.addEventListener("change", async (ev) => {
+    const on = (ev.target as HTMLInputElement).checked;
+    try {
+      if (on) await enableAutostart();
+      else await disableAutostart();
+    } catch (e) {
+      toast(String(e));
+      (ev.target as HTMLInputElement).checked = await autostartEnabled().catch(() => !on);
+    }
   });
   overlay.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((btn) => {
     btn.addEventListener("click", () => showTab(btn.dataset.tab || "general"));

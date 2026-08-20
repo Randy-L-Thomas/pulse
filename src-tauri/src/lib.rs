@@ -113,11 +113,20 @@ pub fn run() {
     });
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+                let _ = win.set_always_on_top(true);
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .manage(state.clone())
         .setup(move |app| {
+            ensure_default_autostart(app.handle());
             let win = app.get_webview_window("main").expect("main window");
             let cfg = state.cfg.lock().unwrap().clone();
             let _ = window::dock_and_size(&win, &cfg, WidthMode::Half);
@@ -153,4 +162,17 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running pulse");
+}
+
+fn ensure_default_autostart(app: &tauri::AppHandle) {
+    use tauri_plugin_autostart::ManagerExt;
+    let marker = config::autostart_inited_path();
+    if marker.is_file() {
+        return;
+    }
+    if let Some(dir) = marker.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = app.autolaunch().enable();
+    let _ = std::fs::write(&marker, b"1\n");
 }
