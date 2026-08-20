@@ -22,7 +22,7 @@ pub struct Config {
     #[serde(default)]
     pub memory: UtilCfg,
     #[serde(default)]
-    pub gpu: UtilCfg,
+    pub gpu: GpuCfg,
     /// Legacy single Cursor block. Migrated into `process` on load.
     #[serde(default, skip_serializing)]
     pub cursor: Option<CursorCfg>,
@@ -89,6 +89,35 @@ impl Default for UtilCfg {
             crit_pct: 95.0,
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GpuCfg {
+    pub warn_pct: f64,
+    pub crit_pct: f64,
+    #[serde(default = "default_vram_warn")]
+    pub vram_warn_pct: f64,
+    #[serde(default = "default_vram_crit")]
+    pub vram_crit_pct: f64,
+}
+
+impl Default for GpuCfg {
+    fn default() -> Self {
+        Self {
+            warn_pct: 80.0,
+            crit_pct: 95.0,
+            vram_warn_pct: default_vram_warn(),
+            vram_crit_pct: default_vram_crit(),
+        }
+    }
+}
+
+fn default_vram_warn() -> f64 {
+    80.0
+}
+
+fn default_vram_crit() -> f64 {
+    95.0
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

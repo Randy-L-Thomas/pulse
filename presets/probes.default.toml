@@ -35,3 +35,5 @@ crit_pct = 95.0
 [gpu]
 warn_pct = 80.0
 crit_pct = 95.0
+vram_warn_pct = 80.0
+vram_crit_pct = 95.0

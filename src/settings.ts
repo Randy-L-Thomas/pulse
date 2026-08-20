@@ -5,6 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
 
 export type UtilCfg = { warn_pct: number; crit_pct: number };
+export type GpuCfg = UtilCfg & { vram_warn_pct: number; vram_crit_pct: number };
 export type HttpCfg = {
   id: string;
   label: string;
@@ -54,7 +55,7 @@ export type Settings = {
   path: { dns_host: string };
   cpu: UtilCfg;
   memory: UtilCfg;
-  gpu: UtilCfg;
+  gpu: GpuCfg;
   http: HttpCfg[];
   file: FileCfg[];
   process: ProcessCfg[];
@@ -96,6 +97,8 @@ export function wireSettings(toast: ToastFn) {
     (document.getElementById("mem-crit") as HTMLInputElement).value = String(s.memory.crit_pct);
     (document.getElementById("gpu-warn") as HTMLInputElement).value = String(s.gpu.warn_pct);
     (document.getElementById("gpu-crit") as HTMLInputElement).value = String(s.gpu.crit_pct);
+    (document.getElementById("gpu-vram-warn") as HTMLInputElement).value = String(s.gpu.vram_warn_pct ?? 80);
+    (document.getElementById("gpu-vram-crit") as HTMLInputElement).value = String(s.gpu.vram_crit_pct ?? 95);
     (document.getElementById("set-allow") as HTMLInputElement).value = (s.launch_allow || []).join(", ");
     const pinOn = document.getElementById("btn-pin")?.classList.contains("on") ?? true;
     document.getElementById("set-pin")!.classList.toggle("on", pinOn);
@@ -202,6 +205,8 @@ export function wireSettings(toast: ToastFn) {
     s.memory.crit_pct = Number((document.getElementById("mem-crit") as HTMLInputElement).value);
     s.gpu.warn_pct = Number((document.getElementById("gpu-warn") as HTMLInputElement).value);
     s.gpu.crit_pct = Number((document.getElementById("gpu-crit") as HTMLInputElement).value);
+    s.gpu.vram_warn_pct = Number((document.getElementById("gpu-vram-warn") as HTMLInputElement).value);
+    s.gpu.vram_crit_pct = Number((document.getElementById("gpu-vram-crit") as HTMLInputElement).value);
     s.launch_allow = (document.getElementById("set-allow") as HTMLInputElement).value
       .split(",")
       .map((x) => x.trim())
