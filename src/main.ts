@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { wireSettings } from "./settings";
+import { setFullLayout, wireModules } from "./modules";
 
 type Status = "ok" | "degraded" | "down";
 
@@ -212,8 +213,14 @@ async function runAction(cell: Cell, action: string) {
   }
 }
 
-document.getElementById("btn-half")!.addEventListener("click", () => invoke("set_width_mode", { mode: "half" }));
-document.getElementById("btn-full")!.addEventListener("click", () => invoke("set_width_mode", { mode: "full" }));
+document.getElementById("btn-half")!.addEventListener("click", () => {
+  setFullLayout(false);
+  invoke("set_width_mode", { mode: "half" });
+});
+document.getElementById("btn-full")!.addEventListener("click", () => {
+  setFullLayout(true);
+  invoke("set_width_mode", { mode: "full" });
+});
 document.getElementById("btn-min")!.addEventListener("click", () => win.minimize());
 document.getElementById("btn-close")!.addEventListener("click", () => win.close());
 pinBtn.addEventListener("click", async () => {
@@ -271,7 +278,9 @@ window.addEventListener("resize", () => {
 });
 
 listen<Snapshot>("snapshot", (ev) => applySnapshot(ev.payload));
+listen<string>("width-mode", (ev) => setFullLayout(ev.payload === "full"));
 invoke<Snapshot>("get_snapshot")
   .then(applySnapshot)
   .catch((err) => toast(String(err)));
 wireSettings(toast);
+wireModules(toast);

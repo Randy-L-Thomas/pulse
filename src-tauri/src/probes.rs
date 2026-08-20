@@ -1,4 +1,4 @@
-use crate::config::{Config, FileCfg, HttpCfg, ProcessCfg, UtilCfg};
+use crate::config::{Config, FileCfg, GpuCfg, HttpCfg, ProcessCfg, UtilCfg};
 use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -322,7 +322,8 @@ fn probe_processes(cfg: &Config, state: &ProbeState) -> Vec<Cell> {
 
 fn process_cell(spec: &ProcessCfg, bytes: u64, count: usize, total_ram: u64) -> Cell {
     let open_enabled = process_open_path(spec).is_some();
-    let actions = radial_actions(open_enabled, false, false, false);
+    let restart = is_cursor_spec(spec) && count > 0;
+    let actions = radial_actions(open_enabled, false, false, restart);
     if count == 0 {
         return Cell {
             id: spec.id.clone(),
@@ -370,6 +371,10 @@ fn process_cell(spec: &ProcessCfg, bytes: u64, count: usize, total_ram: u64) -> 
         ),
         actions,
     }
+}
+
+pub(crate) fn is_cursor_spec(spec: &ProcessCfg) -> bool {
+    spec.id.eq_ignore_ascii_case("cursor") || spec.exe_name.eq_ignore_ascii_case("cursor")
 }
 
 pub(crate) fn process_open_path(spec: &ProcessCfg) -> Option<PathBuf> {
@@ -554,29 +559,61 @@ fn probe_gpu(cfg: &Config, state: &ProbeState) -> Cell {
     }
 }
 
-fn gpu_cell(sample: GpuSample, cfg: &UtilCfg) -> Cell {
+fn worse(a: Status, b: Status) -> Status {
+    match (a, b) {
+        (Status::Down, _) | (_, Status::Down) => Status::Down,
+        (Status::Degraded, _) | (_, Status::Degraded) => Status::Degraded,
+        _ => Status::Ok,
+    }
+}
+
+fn gpu_cell(sample: GpuSample, cfg: &GpuCfg) -> Cell {
     let pct = sample.util.clamp(0.0, 100.0);
-    let detail = if sample.mem_total_mib > 0.0 {
+    let vram_pct = if sample.mem_total_mib > 0.0 {
+        (sample.mem_used_mib / sample.mem_total_mib * 100.0).clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+    let util_st = util_status(
+        pct,
+        &UtilCfg {
+            warn_pct: cfg.warn_pct,
+            crit_pct: cfg.crit_pct,
+        },
+    );
+    let vram_st = util_status(
+        vram_pct,
+        &UtilCfg {
+            warn_pct: cfg.vram_warn_pct,
+            crit_pct: cfg.vram_crit_pct,
+        },
+    );
+    let status = worse(util_st, vram_st);
+    let vram = if sample.mem_total_mib > 0.0 {
         format!(
             "{:.1}/{:.0} GB",
             sample.mem_used_mib / 1024.0,
             sample.mem_total_mib / 1024.0
         )
-    } else if !sample.name.is_empty() {
-        sample.name.chars().take(22).collect()
     } else {
-        "engine".into()
+        "vram n/a".into()
+    };
+    let primary = format!("{pct:.0}%\n{vram}");
+    let detail = if sample.name.is_empty() {
+        format!("gpu {pct:.0}% · vram {vram_pct:.0}%")
+    } else {
+        format!("{} · vram {vram_pct:.0}%", sample.name.chars().take(18).collect::<String>())
     };
     Cell {
         id: "gpu".into(),
         label: "GPU".into(),
-        status: util_status(pct, cfg),
-        primary: format!("{pct:.0}%"),
+        status,
+        primary,
         detail: detail.clone(),
         copy_text: if sample.name.is_empty() {
-            format!("GPU {pct:.1}% {detail}")
+            format!("GPU util {pct:.1}%  vram {vram} ({vram_pct:.0}%)")
         } else {
-            format!("GPU {pct:.1}% {} {detail}", sample.name)
+            format!("GPU {} util {pct:.1}%  vram {vram} ({vram_pct:.0}%)", sample.name)
         },
         actions: copy_only(),
     }

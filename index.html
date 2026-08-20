@@ -12,14 +12,15 @@
         <span class="mark" data-tauri-drag-region>PULSE</span>
         <span id="clock" class="clock" data-tauri-drag-region></span>
         <div class="title-actions">
-          <button type="button" id="btn-half" class="tb" title="Half width — leave Translate on the right">Half</button>
-          <button type="button" id="btn-full" class="tb" title="Full strip width">Full</button>
+          <button type="button" id="btn-half" class="tb" title="Half — yield the right half of the strip">Half</button>
+          <button type="button" id="btn-full" class="tb" title="Full — health + modules">Full</button>
           <button type="button" id="btn-settings" class="tb" title="Settings">Set</button>
           <button type="button" id="btn-pin" class="tb on" title="Stay on top of other windows" aria-pressed="true">Pin</button>
           <button type="button" id="btn-min" class="tb ico" title="Minimize">–</button>
           <button type="button" id="btn-close" class="tb ico" title="Close">×</button>
         </div>
       </header>
+      <div id="workspace">
       <main class="body">
         <section class="trace" aria-label="Internet latency">
           <div class="trace-meta">
@@ -31,6 +32,58 @@
         </section>
         <section id="cells" class="cells" aria-label="Systems"></section>
       </main>
+      <aside id="modules" hidden>
+        <nav class="mod-switch">
+          <button type="button" class="tb on" data-mod="translate">Translate</button>
+          <button type="button" class="tb" data-mod="chat">Chat</button>
+        </nav>
+        <section id="mod-translate" class="mod-pane">
+          <div class="mod-row">
+            <select id="mt-from" title="From">
+              <option value="es">Spanish</option>
+              <option value="en">English</option>
+              <option value="fr">French</option>
+              <option value="pt">Portuguese</option>
+              <option value="de">German</option>
+              <option value="ar">Arabic</option>
+            </select>
+            <button type="button" id="mt-swap" class="tb" title="Swap">↔</button>
+            <select id="mt-to" title="To">
+              <option value="en">English</option>
+              <option value="es">Spanish</option>
+              <option value="fr">French</option>
+              <option value="pt">Portuguese</option>
+              <option value="de">German</option>
+              <option value="ar">Arabic</option>
+            </select>
+            <label class="mod-check"><input id="mt-enrich" type="checkbox" /> Enrich</label>
+            <button type="button" id="mt-go" class="tb on">Translate</button>
+          </div>
+          <div class="mod-row">
+            <select id="mt-win" class="wide"></select>
+            <button type="button" id="mt-bind" class="tb">Bind</button>
+            <button type="button" id="mt-ocr" class="tb">OCR</button>
+            <span id="mt-status" class="hint"></span>
+          </div>
+          <div class="mt-cols">
+            <textarea id="mt-src" placeholder="source"></textarea>
+            <textarea id="mt-dst" placeholder="translation" readonly></textarea>
+          </div>
+        </section>
+        <section id="mod-chat" class="mod-pane" hidden>
+          <div class="mod-row">
+            <select id="chat-model"></select>
+            <button type="button" id="chat-refresh" class="tb">Models</button>
+            <span id="chat-status" class="hint"></span>
+          </div>
+          <div id="chat-log" class="chat-log"></div>
+          <div class="mod-row">
+            <input id="chat-in" type="text" placeholder="message" />
+            <button type="button" id="chat-send" class="tb on">Send</button>
+          </div>
+        </section>
+      </aside>
+      </div>
     </div>
     <div id="radial" class="radial" hidden>
       <div class="radial-disc"></div>
@@ -81,6 +134,8 @@
             <label>RAM crit% <input id="mem-crit" type="number" /></label>
             <label>GPU warn% <input id="gpu-warn" type="number" /></label>
             <label>GPU crit% <input id="gpu-crit" type="number" /></label>
+            <label>VRAM warn% <input id="gpu-vram-warn" type="number" /></label>
+            <label>VRAM crit% <input id="gpu-vram-crit" type="number" /></label>
           </div>
           <h3>HTTP cells</h3>
           <div id="http-list" class="stack"></div>
@@ -91,9 +146,11 @@
         </section>
         <section id="tab-update" class="settings-tab" hidden>
           <p id="update-meta" class="hint"></p>
+          <p class="hint">Check now reads a tagged GitHub Release, not a git push.</p>
           <p id="update-last" class="hint">last checked — never</p>
           <div class="settings-row">
             <button type="button" id="btn-check-update" class="tb">Check now</button>
+            <button type="button" id="btn-open-releases" class="tb">Releases</button>
             <span id="update-status" class="hint"></span>
           </div>
         </section>

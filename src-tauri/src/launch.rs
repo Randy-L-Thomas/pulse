@@ -33,13 +33,77 @@ pub fn run_action(cfg: &Config, cell_id: &str, action: &str) -> Result<String, S
 fn process_action(spec: &ProcessCfg, action: &str) -> Result<String, String> {
     match action {
         "open" => {
+            if crate::probes::is_cursor_spec(spec) && cursor_main_running() {
+                return crate::winui::pop_cursor();
+            }
             let path = crate::probes::process_open_path(spec).ok_or("exe not found")?;
             open::that(&path).map_err(|e| e.to_string())?;
             Ok(format!("opened {}", path.display()))
         }
+        "restart" if crate::probes::is_cursor_spec(spec) => restart_cursor(spec),
         "stop" | "restart" => Err("won't stop this process from Pulse".into()),
         _ => Err("no launch action".into()),
     }
+}
+
+fn cursor_main_running() -> bool {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::All,
+        true,
+        sysinfo::ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::OnlyIfNotSet),
+    );
+    sys.processes().values().any(|p| {
+        let name = p.name().to_string_lossy();
+        is_main_cursor_name(&name)
+            && p.exe()
+                .map(|e| {
+                    let n = e.to_string_lossy().to_ascii_lowercase();
+                    !n.contains("\\microsoft vs code")
+                        && !n.contains("\\vscode\\")
+                        && (n.contains("\\programs\\cursor\\")
+                            || n.contains("\\program files\\cursor\\")
+                            || n.ends_with("\\cursor.exe"))
+                })
+                .unwrap_or(true)
+    })
+}
+
+fn is_main_cursor_name(name: &str) -> bool {
+    name.trim_end_matches(".exe").eq_ignore_ascii_case("cursor")
+}
+
+fn restart_cursor(spec: &ProcessCfg) -> Result<String, String> {
+    let path = crate::probes::process_open_path(spec).ok_or("exe not found")?;
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::All,
+        true,
+        sysinfo::ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::OnlyIfNotSet),
+    );
+    let mut killed = 0u32;
+    for p in sys.processes().values() {
+        let name = p.name().to_string_lossy();
+        if !is_main_cursor_name(&name) {
+            continue;
+        }
+        if let Some(exe) = p.exe() {
+            let n = exe.to_string_lossy().to_ascii_lowercase();
+            if n.contains("\\microsoft vs code") || n.contains("\\vscode\\") {
+                continue;
+            }
+        }
+        if p.kill() {
+            killed += 1;
+        }
+    }
+    if killed == 0 {
+        open::that(&path).map_err(|e| e.to_string())?;
+        return Ok("cursor was not running — launched".into());
+    }
+    std::thread::sleep(Duration::from_millis(900));
+    open::that(&path).map_err(|e| e.to_string())?;
+    Ok("restarted Cursor".into())
 }
 
 fn http_action(spec: &HttpCfg, action: &str, allow: &[String]) -> Result<String, String> {
