@@ -1,0 +1,26 @@
+---
+description: After user-facing Pulse changes land on main, ship a GitHub Release in the same session (semver bump, merge, annotated v* tag). Do not wait to be asked.
+alwaysApply: true
+---
+
+# Ship a GitHub Release after user-facing merges
+
+A merge to `main` does **not** update the installed app (`%LOCALAPPDATA%\pulse\pulse.exe`). Updates come only from https://github.com/Randy-L-Thomas/pulse/releases/latest/download/latest.json. `.github/workflows/release.yml` runs only on `v*` tags. `npm run tauri -- dev` is a different copy.
+
+## When
+
+After user-facing app changes are on `main`, ship a Release in the **same session**. Do not wait for "update", "tag", "release", or "bump".
+
+**Skip** for docs-only / rules-only changes, or when Randy says not to ship yet.
+
+## How (same as v0.1.3 / PR #7)
+
+1. Bump patch semver in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` (if the crate version changed), and `README.md` if it cites the version.
+2. Commit **named files only** — never `git add .`. Message like: `Bump Pulse to 0.1.X so Check now can install …`
+3. Push branch `cursor/vX.Y.Z-release`, open a PR, merge it yourself.
+4. Push an **annotated** tag from `main`: `git tag -a vX.Y.Z -m "Pulse vX.Y.Z"` then `git push origin vX.Y.Z`.
+5. After Release assets exist, tell Randy to click **Upd** (or Settings → Update → Check now) on the installed strip.
+
+## Git safety
+
+No force push, no skip hooks, no `git add .`. Do not tag a rules-only or docs-only change.
