@@ -29,4 +29,15 @@ Tag `v0.1.5` (or later) to have GitHub Actions publish a Release with the instal
 
 The repo must be **public** for Settings → Update → Check now to work. GitHub keeps release assets private on a private repo, so the installed app cannot fetch `latest.json`. Auto-update reads `https://github.com/Randy-L-Thomas/pulse/releases/latest/download/latest.json`.
 
-Updater signing: store `src-tauri\pulse.key` (gitignored) in GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY`. Optional: `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. If you lose the key, generate a new pair with `npx tauri signer generate` and update `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`. First SmartScreen warning is expected (no Authenticode cert yet).
+Updater signing: store `src-tauri\pulse.key` (gitignored) in GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY`. Optional: `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. If you lose the key, generate a new pair with `npx tauri signer generate` and update `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
+
+Authenticode (SmartScreen) is separate from updater minisign. To sign Release installers, buy an **OV code-signing** certificate (not SSL; self-signed will not help SmartScreen), export a password-protected `.pfx`, then add GitHub Actions secrets:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("pulse.pfx")) | Set-Clipboard
+```
+
+- `WINDOWS_PFX_BASE64` — that clipboard value
+- `WINDOWS_PFX_PASSWORD` — the PFX export password
+
+If those secrets are missing, `release.yml` still builds an unsigned NSIS installer. First SmartScreen warning is expected until a later `v*` tag is built with the secrets set.
