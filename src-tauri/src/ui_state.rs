@@ -18,6 +18,8 @@ pub struct UiState {
     pub ollama_model: String,
     #[serde(default = "default_ollama")]
     pub ollama_url: String,
+    #[serde(default)]
+    pub cell_order: Vec<String>,
 }
 
 fn default_module() -> String {
@@ -46,6 +48,7 @@ impl Default for UiState {
             mt_enrich: false,
             ollama_model: String::new(),
             ollama_url: default_ollama(),
+            cell_order: Vec::new(),
         }
     }
 }
