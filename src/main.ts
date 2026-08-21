@@ -479,9 +479,14 @@ document.querySelector(".trace")!.addEventListener("click", async (ev) => {
   }
 });
 
+const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+
 function tickClock() {
   const d = new Date();
-  clockEl.textContent = d.toTimeString().slice(0, 8);
+  const utc = d.toISOString().slice(11, 16);
+  const local = d.toTimeString().slice(0, 8);
+  const date = `${String(d.getDate()).padStart(2, "0")}${MONTHS[d.getMonth()]}${String(d.getFullYear()).slice(-2)}`;
+  clockEl.textContent = `[${utc}]  ${local}  ${date}`;
 }
 tickClock();
 window.setInterval(tickClock, 1000);
