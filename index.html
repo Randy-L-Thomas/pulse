@@ -15,6 +15,7 @@
           <button type="button" id="btn-half" class="tb" title="Half — yield the right half of the strip">Half</button>
           <button type="button" id="btn-full" class="tb" title="Full — health + modules">Full</button>
           <button type="button" id="btn-settings" class="tb" title="Settings">Set</button>
+          <button type="button" id="btn-update" class="tb" title="Check now — download and install if available">Upd</button>
           <button type="button" id="btn-pin" class="tb on" title="Stay on top of other windows" aria-pressed="true">Pin</button>
           <button type="button" id="btn-min" class="tb ico" title="Minimize">–</button>
           <button type="button" id="btn-close" class="tb ico" title="Close">×</button>
@@ -24,34 +25,38 @@
       <main class="body">
         <section class="trace" aria-label="Internet latency">
           <div class="trace-meta">
-            <span class="trace-label">NET</span>
-            <span id="net-primary" class="trace-read">—</span>
+            <div class="trace-head">
+              <span class="trace-label">NET</span>
+              <span id="net-primary" class="trace-read">—</span>
+            </div>
             <span id="net-detail" class="trace-sub"></span>
           </div>
-          <canvas id="spark" width="560" height="120"></canvas>
+          <div class="trace-spark">
+            <canvas id="spark" width="200" height="72"></canvas>
+          </div>
         </section>
         <section id="cells" class="cells" aria-label="Systems"></section>
       </main>
       <aside id="modules" hidden>
-        <nav class="mod-switch">
-          <button type="button" class="tb on" data-mod="translate">Translate</button>
-          <button type="button" class="tb" data-mod="ocr">OCR</button>
-          <button type="button" class="tb" data-mod="chat">Chat</button>
+        <nav class="mod-switch" aria-label="Modules">
+          <button type="button" class="mod-tab on" data-mod="translate">Translate</button>
+          <button type="button" class="mod-tab" data-mod="ocr">OCR</button>
+          <button type="button" class="mod-tab" data-mod="chat">Chat</button>
         </nav>
         <section id="mod-translate" class="mod-pane">
-          <div class="mod-row">
+          <div class="mod-row mt-bar">
             <select id="mt-from" title="From">
               <option value="es">Mexican Spanish</option>
               <option value="en">English</option>
             </select>
-            <button type="button" id="mt-swap" class="tb" title="Swap languages">↔</button>
+            <button type="button" id="mt-swap" class="tb mt-swap" title="Swap languages">↔</button>
             <select id="mt-to" title="To">
               <option value="en">English</option>
               <option value="es">Mexican Spanish</option>
             </select>
             <button type="button" id="mt-copy" class="tb">Copy</button>
             <button type="button" id="mt-clear" class="tb">Clear</button>
-            <span id="mt-status" class="hint"></span>
+            <span id="mt-status" class="hint mt-hint"></span>
           </div>
           <div class="mt-cols">
             <textarea id="mt-src" placeholder="Type or paste"></textarea>

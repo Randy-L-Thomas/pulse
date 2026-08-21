@@ -20,6 +20,8 @@ pub struct UiState {
     pub ollama_url: String,
     #[serde(default = "default_font_px")]
     pub font_px: u32,
+    #[serde(default)]
+    pub cell_order: Vec<String>,
 }
 
 fn default_module() -> String {
@@ -59,6 +61,7 @@ impl Default for UiState {
             ollama_model: String::new(),
             ollama_url: default_ollama(),
             font_px: default_font_px(),
+            cell_order: Vec::new(),
         }
     }
 }

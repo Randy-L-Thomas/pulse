@@ -40,9 +40,10 @@ body.full #workspace {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(220px, 32%) 1fr;
+  grid-template-columns: 200px minmax(0, 1fr);
   gap: 8px;
   padding: 8px;
+  align-items: stretch;
 }
 
 .titlebar {
@@ -108,39 +109,38 @@ body.radial-open .clock {
 @media (max-width: 1100px) {
   .body {
     grid-template-columns: 1fr;
-    grid-template-rows: 108px 1fr;
+    grid-template-rows: auto 1fr;
   }
 }
 
 .trace {
-  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-self: start;
   background:
     linear-gradient(180deg, rgba(63, 212, 176, 0.05), transparent 40%),
     var(--panel);
   border: 1px solid var(--bezel);
   border-radius: 3px;
   overflow: hidden;
+  min-width: 0;
   min-height: 0;
-}
-
-.trace::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(63, 212, 176, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(63, 212, 176, 0.06) 1px, transparent 1px);
-  background-size: 24px 16px;
-  pointer-events: none;
+  width: 100%;
 }
 
 .trace-meta {
-  position: relative;
-  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 8px 4px;
+  flex-shrink: 0;
+}
+
+.trace-head {
   display: flex;
   align-items: baseline;
-  gap: 10px;
-  padding: 6px 10px 0;
+  gap: 8px;
 }
 
 .trace-label {
@@ -155,19 +155,41 @@ body.radial-open .clock {
   font-size: 22px;
   font-variant-numeric: tabular-nums;
   color: var(--ok);
+  line-height: 1.1;
 }
 
 .trace-sub {
   font-family: "Cascadia Mono", "Consolas", ui-monospace, monospace;
-  font-size: 11px;
+  font-size: 10px;
+  line-height: 1.35;
   color: var(--muted);
+  white-space: normal;
+  max-width: 100%;
+}
+
+.trace-spark {
+  position: relative;
+  flex: 0 0 72px;
+  height: 72px;
+  margin: 0 4px 6px;
+}
+
+.trace-spark::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(63, 212, 176, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(63, 212, 176, 0.06) 1px, transparent 1px);
+  background-size: 24px 16px;
+  pointer-events: none;
 }
 
 #spark {
-  position: absolute;
-  inset: 28px 4px 4px;
-  width: calc(100% - 8px);
-  height: calc(100% - 32px);
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .cells {
@@ -185,15 +207,34 @@ body.radial-open .clock {
   border: 1px solid var(--bezel);
   border-radius: 3px;
   padding: 10px 10px 8px 14px;
-  cursor: pointer;
+  cursor: grab;
   min-height: 0;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  touch-action: none;
 }
 
 .cell:hover { border-color: #3d5349; }
 .cell:focus-visible { outline: 1px solid var(--ok); }
+
+.cells.reordering .cell { cursor: grabbing; }
+
+.cell.dragging {
+  opacity: 0.92;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  border-color: var(--ok);
+  cursor: grabbing;
+  z-index: 40;
+}
+
+.cell-slot {
+  border: 1px dashed var(--ok);
+  background: rgba(63, 212, 176, 0.08);
+  border-radius: 3px;
+  min-height: 86px;
+  pointer-events: none;
+}
 
 .pip {
   position: absolute;
@@ -380,11 +421,22 @@ body.radial-open .clock {
 .hint { color: var(--muted); font-size: 11px; margin: 6px 0; }
 #modules .hint { font-size: 0.85em; margin: 0; }
 
+#modules .hint {
+  margin: 0;
+  font-size: 10px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 #modules {
   display: none;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
   border-left: 1px solid var(--hair);
   background: #101816;
   padding: 6px 8px 8px;
@@ -395,21 +447,80 @@ body.full #modules:not([hidden]) {
   display: flex;
 }
 
-.mod-switch { display: flex; gap: 4px; margin-bottom: 6px; }
+.mod-switch {
+  display: flex;
+  gap: 0;
+  flex-shrink: 0;
+  margin: 0 0 6px;
+  border-bottom: 1px solid var(--hair);
+}
+
+.mod-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font: 600 10px/1 "Segoe UI", sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 10px 6px;
+  margin-bottom: -1px;
+  cursor: pointer;
+}
+
+.mod-tab:hover,
+.mod-tab.on {
+  color: var(--text);
+  border-bottom-color: var(--ok);
+}
 
 .mod-pane {
+  display: none;
   flex: 1;
   min-height: 0;
-  display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
+.mod-pane:not([hidden]) {
+  display: flex;
+}
+
+.mod-pane[hidden] {
+  display: none !important;
+}
+
 .mod-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
+}
+
+.mt-bar {
+  min-height: 22px;
+}
+
+.mt-bar select {
+  font-size: 11px;
+  padding: 2px 4px;
+  height: 22px;
+  max-width: 148px;
+}
+
+.mt-swap {
+  padding: 2px 6px;
+  flex-shrink: 0;
+}
+
+.mt-hint {
+  margin: 0;
+  font-size: 10px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mod-check {
@@ -428,6 +539,11 @@ body.full #modules:not([hidden]) {
   padding: 4px 6px;
 }
 
+#modules select.wide {
+  flex: 1;
+  min-width: 0;
+}
+
 #modules textarea, #chat-in { user-select: text; }
 
 .mt-cols {
@@ -438,10 +554,13 @@ body.full #modules:not([hidden]) {
   gap: 6px;
 }
 
-.mt-cols textarea {
+#modules .mt-cols textarea {
   resize: none;
   min-height: 0;
   height: 100%;
+  font-size: 17px;
+  line-height: 1.45;
+  padding: 8px 10px;
 }
 
 .ocr-out {

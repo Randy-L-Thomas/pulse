@@ -1,8 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { check } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
+import { runAppUpdate, updateErrorText } from "./updater";
 
 export type UtilCfg = { warn_pct: number; crit_pct: number };
 export type GpuCfg = UtilCfg & { vram_warn_pct: number; vram_crit_pct: number };
@@ -313,23 +312,10 @@ export function wireSettings(toast: ToastFn) {
     }
   });
   document.getElementById("btn-check-update")!.addEventListener("click", async () => {
-    const status = document.getElementById("update-status") as HTMLElement;
-    const last = document.getElementById("update-last") as HTMLElement;
-    status.textContent = "checking…";
-    last.textContent = `last checked ${new Date().toLocaleTimeString()}`;
     try {
-      const update = await check();
-      if (!update) {
-        status.textContent = "up to date";
-        return;
-      }
-      status.textContent = `v${update.version} — downloading`;
-      await update.downloadAndInstall();
-      status.textContent = "restarting";
-      await relaunch();
+      await runAppUpdate();
     } catch (e) {
-      status.textContent = String(e);
-      toast(String(e), 5000);
+      toast(updateErrorText(e), 5000);
     }
   });
 
