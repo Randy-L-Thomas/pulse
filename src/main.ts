@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { wireSettings } from "./settings";
 import { setFullLayout, wireModules } from "./modules";
+import { wireTitlebarUpdate } from "./updater";
 
 type Status = "ok" | "degraded" | "down";
 
@@ -283,4 +284,5 @@ invoke<Snapshot>("get_snapshot")
   .then(applySnapshot)
   .catch((err) => toast(String(err)));
 wireSettings(toast);
+wireTitlebarUpdate(toast);
 wireModules(toast);
