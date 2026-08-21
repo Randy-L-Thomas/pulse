@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { wireSettings } from "./settings";
 import { setFullLayout, wireModules } from "./modules";
+import { loadUi, saveUi, uiCache } from "./ui-store";
 
 type Status = "ok" | "degraded" | "down";
 
@@ -65,8 +66,8 @@ function toast(msg: string, ms = 2800) {
 
 function drawSpark(history: number[]) {
   const dpr = window.devicePixelRatio || 1;
-  const cssW = spark.clientWidth || 560;
-  const cssH = spark.clientHeight || 120;
+  const cssW = spark.clientWidth || 200;
+  const cssH = spark.clientHeight || 72;
   spark.width = Math.floor(cssW * dpr);
   spark.height = Math.floor(cssH * dpr);
   const ctx = spark.getContext("2d");
@@ -90,9 +91,154 @@ function drawSpark(history: number[]) {
   ctx.stroke();
 }
 
-function renderCells(cells: Cell[]) {
-  cellsEl.replaceChildren();
+let lastSnap: Snapshot | null = null;
+let cellsById = new Map<string, Cell>();
+let cellOrder: string[] = [];
+let uiReady = false;
+let suppressCellClick = false;
+
+const DRAG_PX = 8;
+type CellPress = {
+  x: number;
+  y: number;
+  ox: number;
+  oy: number;
+  el: HTMLButtonElement;
+};
+type CellDrag = {
+  el: HTMLButtonElement;
+  slot: HTMLElement;
+};
+let cellPress: CellPress | null = null;
+let cellDrag: CellDrag | null = null;
+
+function sortCells(cells: Cell[]): Cell[] {
+  const map = new Map(cells.map((c) => [c.id, c]));
+  const out: Cell[] = [];
+  const seen = new Set<string>();
+  for (const id of cellOrder) {
+    const cell = map.get(id);
+    if (!cell) continue;
+    out.push(cell);
+    seen.add(id);
+  }
   for (const cell of cells) {
+    if (seen.has(cell.id)) continue;
+    out.push(cell);
+  }
+  return out;
+}
+
+function paintCell(btn: HTMLElement, cell: Cell) {
+  const dragging = btn.classList.contains("dragging");
+  btn.className = `cell ${cell.status}${dragging ? " dragging" : ""}`;
+  btn.dataset.id = cell.id;
+  const name = btn.querySelector(".cell-name");
+  const read = btn.querySelector(".read");
+  const detail = btn.querySelector(".detail");
+  if (name) name.textContent = cell.label;
+  if (read) read.textContent = cell.primary;
+  if (detail) detail.textContent = cell.detail;
+}
+
+function cellIdsFromDom(): string[] {
+  return [...cellsEl.querySelectorAll<HTMLElement>(":scope > .cell")]
+    .map((el) => el.dataset.id)
+    .filter((id): id is string => Boolean(id));
+}
+
+function persistCellOrder(ids: string[]) {
+  cellOrder = ids;
+  const ui = uiCache();
+  if (!ui) return;
+  ui.cell_order = ids;
+  void saveUi().catch((e) => toast(String(e)));
+}
+
+function startCellDrag(ev: PointerEvent, press: CellPress) {
+  const el = press.el;
+  const r = el.getBoundingClientRect();
+  const slot = document.createElement("div");
+  slot.className = "cell-slot";
+  slot.style.height = `${r.height}px`;
+  el.after(slot);
+  document.body.appendChild(el);
+  el.classList.add("dragging");
+  try {
+    el.setPointerCapture(ev.pointerId);
+  } catch {
+    /* capture is optional */
+  }
+  el.style.position = "fixed";
+  el.style.left = `${ev.clientX - press.ox}px`;
+  el.style.top = `${ev.clientY - press.oy}px`;
+  el.style.width = `${r.width}px`;
+  el.style.height = `${r.height}px`;
+  el.style.pointerEvents = "none";
+  el.style.margin = "0";
+  el.style.zIndex = "40";
+  cellsEl.classList.add("reordering");
+  cellDrag = { el, slot };
+}
+
+function placeSlot(ev: PointerEvent, drag: CellDrag) {
+  const hits = document.elementsFromPoint(ev.clientX, ev.clientY);
+  const over = hits.find((n) => {
+    const el = n as HTMLElement;
+    return el.classList?.contains("cell") && el !== drag.el;
+  }) as HTMLElement | undefined;
+  if (over && over.parentElement === cellsEl) {
+    const r = over.getBoundingClientRect();
+    const after = ev.clientX > r.left + r.width / 2 || ev.clientY > r.top + r.height / 2;
+    if (after) over.after(drag.slot);
+    else over.before(drag.slot);
+    return;
+  }
+  if (hits.includes(cellsEl)) cellsEl.appendChild(drag.slot);
+}
+
+function finishCellDrag() {
+  const drag = cellDrag;
+  if (!drag) return;
+  drag.el.classList.remove("dragging");
+  drag.el.style.position = "";
+  drag.el.style.left = "";
+  drag.el.style.top = "";
+  drag.el.style.width = "";
+  drag.el.style.height = "";
+  drag.el.style.pointerEvents = "";
+  drag.el.style.margin = "";
+  drag.el.style.zIndex = "";
+  drag.slot.replaceWith(drag.el);
+  cellsEl.classList.remove("reordering");
+  cellDrag = null;
+  persistCellOrder(cellIdsFromDom());
+}
+
+function renderCells(cells: Cell[]) {
+  const ordered = sortCells(cells);
+  cellsById = new Map(ordered.map((c) => [c.id, c]));
+  if (cellDrag) {
+    for (const cell of ordered) {
+      const btn =
+        cellDrag.el.dataset.id === cell.id
+          ? cellDrag.el
+          : cellsEl.querySelector<HTMLElement>(`:scope > .cell[data-id="${CSS.escape(cell.id)}"]`);
+      if (btn) paintCell(btn, cell);
+    }
+    return;
+  }
+  const current = cellIdsFromDom();
+  const nextIds = ordered.map((c) => c.id);
+  if (current.length === nextIds.length && current.every((id, i) => id === nextIds[i])) {
+    for (const cell of ordered) {
+      const btn = cellsEl.querySelector<HTMLElement>(`:scope > .cell[data-id="${CSS.escape(cell.id)}"]`);
+      if (btn) paintCell(btn, cell);
+    }
+    return;
+  }
+  cellsEl.replaceChildren();
+  for (const cell of ordered) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = `cell ${cell.status}`;
@@ -102,20 +248,6 @@ function renderCells(cells: Cell[]) {
     )}</span><span class="read">${escapeHtml(cell.primary)}</span><span class="detail">${escapeHtml(
       cell.detail,
     )}</span>`;
-    btn.addEventListener("pointerup", (ev) => {
-      if (ev.button !== 0) return;
-      const skip = skipOpenCellId === cell.id;
-      skipOpenCellId = null;
-      if (skip) return;
-      openRadial(ev, cell);
-    });
-    btn.addEventListener("contextmenu", (ev) => {
-      ev.preventDefault();
-      const skip = skipOpenCellId === cell.id;
-      skipOpenCellId = null;
-      if (skip) return;
-      openRadial(ev, cell);
-    });
     cellsEl.appendChild(btn);
   }
 }
@@ -181,7 +313,9 @@ function renderNet(net: NetState) {
 }
 
 function applySnapshot(snap: Snapshot) {
+  lastSnap = snap;
   renderNet(snap.net);
+  if (!uiReady) return;
   renderCells(snap.cells);
 }
 
@@ -243,6 +377,82 @@ document.addEventListener("contextmenu", (ev) => {
   ev.preventDefault();
 });
 
+function cellFromEvent(ev: Event): Cell | null {
+  const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>(".cell");
+  if (!btn || !cellsEl.contains(btn) || btn.classList.contains("dragging")) return null;
+  return cellsById.get(btn.dataset.id || "") ?? null;
+}
+
+cellsEl.addEventListener("pointerdown", (ev) => {
+  if (ev.button !== 0) return;
+  const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>(".cell");
+  if (!btn || btn.parentElement !== cellsEl) return;
+  const r = btn.getBoundingClientRect();
+  suppressCellClick = false;
+  cellPress = {
+    x: ev.clientX,
+    y: ev.clientY,
+    ox: ev.clientX - r.left,
+    oy: ev.clientY - r.top,
+    el: btn,
+  };
+});
+
+window.addEventListener("pointermove", (ev) => {
+  if (cellDrag) {
+    const ox = cellPress?.ox ?? 0;
+    const oy = cellPress?.oy ?? 0;
+    cellDrag.el.style.left = `${ev.clientX - ox}px`;
+    cellDrag.el.style.top = `${ev.clientY - oy}px`;
+    placeSlot(ev, cellDrag);
+    return;
+  }
+  if (!cellPress) return;
+  if (Math.hypot(ev.clientX - cellPress.x, ev.clientY - cellPress.y) < DRAG_PX) return;
+  suppressCellClick = true;
+  startCellDrag(ev, cellPress);
+});
+
+window.addEventListener(
+  "pointerup",
+  () => {
+    if (cellDrag) {
+      finishCellDrag();
+      suppressCellClick = true;
+    }
+    cellPress = null;
+  },
+  true,
+);
+
+window.addEventListener("pointercancel", () => {
+  if (cellDrag) finishCellDrag();
+  cellPress = null;
+});
+
+cellsEl.addEventListener("pointerup", (ev) => {
+  if (ev.button !== 0) return;
+  if (suppressCellClick) {
+    suppressCellClick = false;
+    return;
+  }
+  const cell = cellFromEvent(ev);
+  if (!cell) return;
+  const skip = skipOpenCellId === cell.id;
+  skipOpenCellId = null;
+  if (skip) return;
+  openRadial(ev, cell);
+});
+
+cellsEl.addEventListener("contextmenu", (ev) => {
+  const cell = cellFromEvent(ev);
+  if (!cell) return;
+  const skip = skipOpenCellId === cell.id;
+  skipOpenCellId = null;
+  if (skip) return;
+  openRadial(ev, cell);
+});
+
 window.addEventListener("pointerdown", (ev) => {
   skipOpenCellId = null;
   if (radial.hidden) return;
@@ -284,3 +494,10 @@ invoke<Snapshot>("get_snapshot")
   .catch((err) => toast(String(err)));
 wireSettings(toast);
 wireModules(toast);
+loadUi()
+  .then((ui) => {
+    cellOrder = ui.cell_order ?? [];
+    uiReady = true;
+    if (lastSnap) renderCells(lastSnap.cells);
+  })
+  .catch((err) => toast(String(err)));
