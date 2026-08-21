@@ -23,7 +23,8 @@ export function wireModules(toast: ToastFn) {
   const chatStatus = document.getElementById("chat-status") as HTMLElement;
   const messages: { role: string; content: string }[] = [];
   let mtTimer = 0;
-  let mtGen = 0;
+  let mtInFlight = false;
+  let mtQueued = false;
 
   function showMod(id: string) {
     const next = MODS.includes(id) ? id : "translate";
@@ -137,28 +138,64 @@ export function wireModules(toast: ToastFn) {
   }
 
   async function runTranslate() {
-    const source = mtSrc.value;
-    if (!source.trim()) {
-      mtDst.value = "";
-      mtStatus.textContent = "";
+    if (mtInFlight) {
+      mtQueued = true;
       return;
     }
-    const gen = ++mtGen;
-    mtStatus.textContent = "…";
+    mtInFlight = true;
     try {
-      const out = await invoke<{ text: string; cached: boolean; engine: string }>("translate_text", {
-        source,
-        from: pickLang(mtFrom.value, "es"),
-        to: pickLang(mtTo.value, "en"),
-        enrich: false,
-      });
-      if (gen !== mtGen) return;
-      mtDst.value = out.text;
-      mtStatus.textContent = out.cached ? "cache" : out.engine;
-    } catch (e) {
-      if (gen !== mtGen) return;
-      mtDst.value = "";
-      mtStatus.textContent = ollamaError(e);
+      do {
+        mtQueued = false;
+        const source = mtSrc.value;
+        const from = pickLang(mtFrom.value, "es");
+        const to = pickLang(mtTo.value, "en");
+        if (!source.trim()) {
+          mtDst.value = "";
+          mtStatus.textContent = "";
+          break;
+        }
+        if (from === to) {
+          mtDst.value = source.trim();
+          mtStatus.textContent = "same";
+          continue;
+        }
+        mtStatus.textContent = "…";
+        try {
+          const out = await invoke<{ text: string; cached: boolean; engine: string }>("translate_text", {
+            source,
+            from,
+            to,
+            enrich: false,
+          });
+          if (mtQueued) continue;
+          if (
+            mtSrc.value !== source ||
+            pickLang(mtFrom.value, "es") !== from ||
+            pickLang(mtTo.value, "en") !== to
+          ) {
+            continue;
+          }
+          mtDst.value = out.text;
+          mtStatus.textContent = out.engine === "same" ? "same" : out.cached ? "cache" : out.engine;
+        } catch (e) {
+          if (mtQueued) continue;
+          if (
+            mtSrc.value !== source ||
+            pickLang(mtFrom.value, "es") !== from ||
+            pickLang(mtTo.value, "en") !== to
+          ) {
+            continue;
+          }
+          mtDst.value = "";
+          mtStatus.textContent = ollamaError(e);
+        }
+      } while (mtQueued);
+    } finally {
+      mtInFlight = false;
+      if (mtQueued) {
+        mtQueued = false;
+        void runTranslate();
+      }
     }
   }
 
@@ -192,7 +229,7 @@ export function wireModules(toast: ToastFn) {
     }
   });
   document.getElementById("mt-clear")!.addEventListener("click", () => {
-    mtGen += 1;
+    mtQueued = false;
     mtSrc.value = "";
     mtDst.value = "";
     mtStatus.textContent = "";
