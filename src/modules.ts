@@ -1,14 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-
-export type UiState = {
-  last_module: string;
-  wa_title: string;
-  mt_from: string;
-  mt_to: string;
-  mt_enrich: boolean;
-  ollama_model: string;
-  ollama_url: string;
-};
+import { loadUi, saveUi, uiCache } from "./ui-store";
 
 type WindowInfo = { title: string; hwnd: number };
 type ToastFn = (msg: string, ms?: number) => void;
@@ -30,7 +21,6 @@ export function wireModules(toast: ToastFn) {
   const chatIn = document.getElementById("chat-in") as HTMLInputElement;
   const chatStatus = document.getElementById("chat-status") as HTMLElement;
   const messages: { role: string; content: string }[] = [];
-  let ui: UiState | null = null;
   let mtTimer = 0;
   let mtGen = 0;
 
@@ -42,6 +32,7 @@ export function wireModules(toast: ToastFn) {
     for (const btn of modules.querySelectorAll<HTMLButtonElement>("[data-mod]")) {
       btn.classList.toggle("on", btn.dataset.mod === next);
     }
+    const ui = uiCache();
     if (ui) {
       ui.last_module = next;
       void persist();
@@ -66,6 +57,7 @@ export function wireModules(toast: ToastFn) {
   }
 
   async function persist() {
+    const ui = uiCache();
     if (!ui) return;
     ui.mt_from = pickLang(mtFrom.value, "es");
     ui.mt_to = pickLang(mtTo.value, "en");
@@ -73,7 +65,7 @@ export function wireModules(toast: ToastFn) {
     ui.ollama_model = chatModel.value;
     ui.wa_title = ocrWin.value || ui.wa_title;
     try {
-      await invoke("save_ui", { ui });
+      await saveUi();
     } catch (e) {
       toast(String(e));
     }
@@ -82,7 +74,7 @@ export function wireModules(toast: ToastFn) {
   async function loadWindows() {
     try {
       const list = await invoke<WindowInfo[]>("list_app_windows");
-      const prev = ui?.wa_title || "WhatsApp";
+      const prev = uiCache()?.wa_title || "WhatsApp";
       ocrWin.replaceChildren();
       const seen = new Set<string>();
       for (const w of list) {
@@ -120,7 +112,8 @@ export function wireModules(toast: ToastFn) {
         opt.textContent = n;
         chatModel.appendChild(opt);
       }
-      if (ui?.ollama_model && names.includes(ui.ollama_model)) chatModel.value = ui.ollama_model;
+      const savedModel = uiCache()?.ollama_model;
+      if (savedModel && names.includes(savedModel)) chatModel.value = savedModel;
       chatStatus.textContent = names.length ? `${names.length} models` : "no models";
     } catch (e) {
       chatStatus.textContent = String(e);
@@ -205,6 +198,7 @@ export function wireModules(toast: ToastFn) {
   });
   document.getElementById("ocr-bind")!.addEventListener("click", async () => {
     await loadWindows();
+    const ui = uiCache();
     if (ui && ocrWin.value) {
       ui.wa_title = ocrWin.value;
       await persist();
@@ -264,9 +258,8 @@ export function wireModules(toast: ToastFn) {
     if (ev.key === "Enter") document.getElementById("chat-send")!.click();
   });
 
-  invoke<UiState>("get_ui")
+  loadUi()
     .then(async (s) => {
-      ui = s;
       mtFrom.value = pickLang(s.mt_from, "es");
       mtTo.value = pickLang(s.mt_to, "en");
       if (mtFrom.value === mtTo.value) {
