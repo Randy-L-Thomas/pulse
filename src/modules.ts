@@ -25,6 +25,7 @@ export function wireModules(toast: ToastFn) {
   let mtTimer = 0;
   let mtInFlight = false;
   let mtQueued = false;
+  let mtEpoch = 0;
 
   function showMod(id: string) {
     const next = MODS.includes(id) ? id : "translate";
@@ -146,6 +147,7 @@ export function wireModules(toast: ToastFn) {
     try {
       do {
         mtQueued = false;
+        const epoch = mtEpoch;
         const source = mtSrc.value;
         const from = pickLang(mtFrom.value, "es");
         const to = pickLang(mtTo.value, "en");
@@ -167,6 +169,7 @@ export function wireModules(toast: ToastFn) {
             to,
             enrich: false,
           });
+          if (epoch !== mtEpoch) break;
           if (mtQueued) continue;
           if (
             mtSrc.value !== source ||
@@ -178,6 +181,7 @@ export function wireModules(toast: ToastFn) {
           mtDst.value = out.text;
           mtStatus.textContent = out.engine === "same" ? "same" : out.cached ? "cache" : out.engine;
         } catch (e) {
+          if (epoch !== mtEpoch) break;
           if (mtQueued) continue;
           if (
             mtSrc.value !== source ||
@@ -229,6 +233,7 @@ export function wireModules(toast: ToastFn) {
     }
   });
   document.getElementById("mt-clear")!.addEventListener("click", () => {
+    mtEpoch += 1;
     mtQueued = false;
     mtSrc.value = "";
     mtDst.value = "";
