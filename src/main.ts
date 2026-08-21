@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { wireSettings } from "./settings";
 import { setFullLayout, wireModules } from "./modules";
 import { loadUi, saveUi, uiCache } from "./ui-store";
+import { wireTitlebarUpdate } from "./updater";
 
 type Status = "ok" | "degraded" | "down";
 
@@ -493,6 +494,7 @@ invoke<Snapshot>("get_snapshot")
   .then(applySnapshot)
   .catch((err) => toast(String(err)));
 wireSettings(toast);
+wireTitlebarUpdate(toast);
 wireModules(toast);
 loadUi()
   .then((ui) => {
