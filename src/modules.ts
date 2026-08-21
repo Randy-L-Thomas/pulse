@@ -27,6 +27,27 @@ export function wireModules(toast: ToastFn) {
   let mtQueued = false;
   let mtEpoch = 0;
 
+  type TranslateOut = {
+    text: string;
+    cached: boolean;
+    engine: string;
+    model?: string | null;
+  };
+
+  function setMtStatus(text: string, kind: "busy" | "ok" | "err" | "") {
+    mtStatus.textContent = text;
+    mtStatus.classList.toggle("busy", kind === "busy");
+    mtStatus.classList.toggle("ok", kind === "ok");
+    mtStatus.classList.toggle("err", kind === "err");
+  }
+
+  function formatMtDone(out: TranslateOut): string {
+    if (out.engine === "same") return "same";
+    const model = out.model?.trim();
+    if (out.cached) return model ? `cache · ${model}` : "cache";
+    return model ? `${out.engine} · ${model}` : out.engine;
+  }
+
   function showMod(id: string) {
     const next = MODS.includes(id) ? id : "translate";
     for (const pane of modules.querySelectorAll<HTMLElement>(".mod-pane")) {
@@ -153,17 +174,17 @@ export function wireModules(toast: ToastFn) {
         const to = pickLang(mtTo.value, "en");
         if (!source.trim()) {
           mtDst.value = "";
-          mtStatus.textContent = "";
+          setMtStatus("", "");
           break;
         }
         if (from === to) {
           mtDst.value = source.trim();
-          mtStatus.textContent = "same";
+          setMtStatus("same", "ok");
           continue;
         }
-        mtStatus.textContent = "…";
+        setMtStatus("Translating", "busy");
         try {
-          const out = await invoke<{ text: string; cached: boolean; engine: string }>("translate_text", {
+          const out = await invoke<TranslateOut>("translate_text", {
             source,
             from,
             to,
@@ -179,7 +200,7 @@ export function wireModules(toast: ToastFn) {
             continue;
           }
           mtDst.value = out.text;
-          mtStatus.textContent = out.engine === "same" ? "same" : out.cached ? "cache" : out.engine;
+          setMtStatus(formatMtDone(out), "ok");
         } catch (e) {
           if (epoch !== mtEpoch) break;
           if (mtQueued) continue;
@@ -191,7 +212,7 @@ export function wireModules(toast: ToastFn) {
             continue;
           }
           mtDst.value = "";
-          mtStatus.textContent = ollamaError(e);
+          setMtStatus(ollamaError(e), "err");
         }
       } while (mtQueued);
     } finally {
@@ -227,7 +248,7 @@ export function wireModules(toast: ToastFn) {
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
-      mtStatus.textContent = "copied";
+      setMtStatus("copied", "ok");
     } catch (e) {
       toast(String(e));
     }
@@ -237,7 +258,7 @@ export function wireModules(toast: ToastFn) {
     mtQueued = false;
     mtSrc.value = "";
     mtDst.value = "";
-    mtStatus.textContent = "";
+    setMtStatus("", "");
   });
   mtFrom.addEventListener("change", () => {
     void persist();

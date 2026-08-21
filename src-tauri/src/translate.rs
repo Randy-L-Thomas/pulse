@@ -45,6 +45,7 @@ pub struct TranslateOut {
     pub text: String,
     pub cached: bool,
     pub engine: String,
+    pub model: Option<String>,
 }
 
 pub async fn translate(
@@ -61,6 +62,7 @@ pub async fn translate(
             text: String::new(),
             cached: true,
             engine: "empty".into(),
+            model: None,
         });
     }
     let from = if from == "auto" {
@@ -74,6 +76,7 @@ pub async fn translate(
             text: src.to_string(),
             cached: true,
             engine: "same".into(),
+            model: None,
         });
     }
     let k = key(from, to, src);
@@ -84,10 +87,11 @@ pub async fn translate(
                 text: hit.clone(),
                 cached: true,
                 engine: "cache".into(),
+                model: cached_mt_model(),
             });
         }
     }
-    let mut out = mt_ollama(client, ollama_url, from, to, src).await?;
+    let (mut out, model) = mt_ollama(client, ollama_url, from, to, src).await?;
     if enrich {
         if let Ok(polished) = enrich_ollama(client, ollama_url, from, to, src, &out).await {
             if is_usable_translation(&polished, src) {
@@ -103,6 +107,7 @@ pub async fn translate(
         text: out,
         cached: false,
         engine: format!("{from}→{to}"),
+        model: Some(model),
     })
 }
 
@@ -187,17 +192,17 @@ async fn mt_ollama(
     from: &str,
     to: &str,
     src: &str,
-) -> Result<String, String> {
+) -> Result<(String, String), String> {
     let model = pick_model(client, base).await?;
     let raw = generate(client, base, &model, &mt_prompt(from, to, src), 0.0).await?;
     let out = clean_translation(&raw, src);
     if is_usable_translation(&out, src) {
-        return Ok(out);
+        return Ok((out, model));
     }
     let raw2 = generate(client, base, &model, &mt_retry_prompt(from, to, src), 0.0).await?;
     let out2 = clean_translation(&raw2, src);
     if is_usable_translation(&out2, src) {
-        return Ok(out2);
+        return Ok((out2, model));
     }
     if out.is_empty() && out2.is_empty() {
         return Err(format!("empty translation from {model}"));
@@ -539,6 +544,7 @@ mod tests {
             .unwrap();
         assert_eq!(out.text, "Hola");
         assert_eq!(out.engine, "same");
+        assert_eq!(out.model, None);
     }
 
     #[tokio::test]
