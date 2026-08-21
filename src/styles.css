@@ -75,6 +75,7 @@ body.full #workspace {
   color: var(--text);
   flex: 1;
   text-align: center;
+  white-space: nowrap;
 }
 
 .title-actions {
