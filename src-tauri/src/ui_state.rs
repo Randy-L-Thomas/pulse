@@ -18,6 +18,8 @@ pub struct UiState {
     pub ollama_model: String,
     #[serde(default = "default_ollama")]
     pub ollama_url: String,
+    #[serde(default = "default_font_px")]
+    pub font_px: u32,
 }
 
 fn default_module() -> String {
@@ -35,6 +37,16 @@ fn default_to() -> String {
 fn default_ollama() -> String {
     "http://127.0.0.1:11434".into()
 }
+fn default_font_px() -> u32 {
+    13
+}
+
+pub const FONT_PX_MIN: u32 = 11;
+pub const FONT_PX_MAX: u32 = 22;
+
+pub fn clamp_font_px(px: u32) -> u32 {
+    px.clamp(FONT_PX_MIN, FONT_PX_MAX)
+}
 
 impl Default for UiState {
     fn default() -> Self {
@@ -46,6 +58,7 @@ impl Default for UiState {
             mt_enrich: false,
             ollama_model: String::new(),
             ollama_url: default_ollama(),
+            font_px: default_font_px(),
         }
     }
 }
@@ -59,7 +72,9 @@ pub fn load() -> UiState {
     let Ok(raw) = fs::read_to_string(&p) else {
         return UiState::default();
     };
-    serde_json::from_str(&raw).unwrap_or_default()
+    let mut state: UiState = serde_json::from_str(&raw).unwrap_or_default();
+    state.font_px = clamp_font_px(state.font_px);
+    state
 }
 
 pub fn save(state: &UiState) -> Result<(), String> {
