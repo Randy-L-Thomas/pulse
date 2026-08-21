@@ -3,6 +3,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 #[derive(Default, Serialize, Deserialize)]
 struct Cache {
@@ -29,7 +31,7 @@ fn save_cache(cache: &Cache) {
 
 fn key(from: &str, to: &str, text: &str) -> String {
     let mut h = Sha256::new();
-    h.update(b"es-MX|en-US|v1|");
+    h.update(b"es-MX|en-US|v2|");
     h.update(from.as_bytes());
     h.update(b"|");
     h.update(to.as_bytes());
@@ -88,13 +90,15 @@ pub async fn translate(
     let mut out = mt_ollama(client, ollama_url, from, to, src).await?;
     if enrich {
         if let Ok(polished) = enrich_ollama(client, ollama_url, from, to, src, &out).await {
-            if !polished.trim().is_empty() {
+            if is_usable_translation(&polished, src) {
                 out = polished;
             }
         }
     }
-    cache.entries.insert(k, out.clone());
-    save_cache(&cache);
+    if is_usable_translation(&out, src) {
+        cache.entries.insert(k, out.clone());
+        save_cache(&cache);
+    }
     Ok(TranslateOut {
         text: out,
         cached: false,
@@ -105,7 +109,17 @@ pub async fn translate(
 pub fn detect_lang(text: &str) -> &'static str {
     let t = text.to_lowercase();
     let marks = t.chars().filter(|c| "áéíóúñü¿¡".contains(*c)).count();
-    let es = ["qué", "hola", "gracias", "por favor", "buenos", "usted", "está", "también", "mañana"];
+    let es = [
+        "qué",
+        "hola",
+        "gracias",
+        "por favor",
+        "buenos",
+        "usted",
+        "está",
+        "también",
+        "mañana",
+    ];
     let en = ["the ", " and ", " you ", " that ", " with ", " this "];
     let es_hits = es.iter().filter(|w| t.contains(*w)).count() + marks;
     let en_hits = en.iter().filter(|w| t.contains(*w)).count();
@@ -151,6 +165,22 @@ Output ONLY the translation. No quotes, labels, notes, or extra lines.\n\n{}",
     )
 }
 
+fn mt_retry_prompt(from: &str, to: &str, src: &str) -> String {
+    format!(
+        "{}\n\nDo not repeat the source text. Output only the translation, nothing else.",
+        mt_prompt(from, to, src)
+    )
+}
+
+pub(crate) fn is_usable_translation(out: &str, src: &str) -> bool {
+    let t = out.trim();
+    !t.is_empty() && !t.eq_ignore_ascii_case(src.trim())
+}
+
+pub(crate) fn should_retry_mt(cleaned: &str, src: &str) -> bool {
+    !is_usable_translation(cleaned, src)
+}
+
 async fn mt_ollama(
     client: &reqwest::Client,
     base: &str,
@@ -161,10 +191,18 @@ async fn mt_ollama(
     let model = pick_model(client, base).await?;
     let raw = generate(client, base, &model, &mt_prompt(from, to, src), 0.0).await?;
     let out = clean_translation(&raw, src);
-    if out.is_empty() {
+    if is_usable_translation(&out, src) {
+        return Ok(out);
+    }
+    let raw2 = generate(client, base, &model, &mt_retry_prompt(from, to, src), 0.0).await?;
+    let out2 = clean_translation(&raw2, src);
+    if is_usable_translation(&out2, src) {
+        return Ok(out2);
+    }
+    if out.is_empty() && out2.is_empty() {
         return Err(format!("empty translation from {model}"));
     }
-    Ok(out)
+    Err(format!("model {model} repeated the source"))
 }
 
 async fn enrich_ollama(
@@ -197,6 +235,10 @@ fn is_reasoning_model(name: &str) -> bool {
         || l.contains("reason")
 }
 
+fn is_coder_model(name: &str) -> bool {
+    name.to_ascii_lowercase().contains("coder")
+}
+
 fn is_mt_model(name: &str) -> bool {
     let l = name.to_ascii_lowercase();
     l.contains("translate")
@@ -226,7 +268,9 @@ pub(crate) fn choose_mt_model(names: &[String]) -> Option<String> {
         "qwen2.5:14b",
     ];
     for p in prefer {
-        if let Some(n) = names.iter().find(|n| n.as_str() == p || n.starts_with(p)) {
+        if let Some(n) = names.iter().find(|n| {
+            (n.as_str() == p || n.starts_with(p)) && !is_coder_model(n) && !is_reasoning_model(n)
+        }) {
             return Some(n.clone());
         }
     }
@@ -240,7 +284,13 @@ pub(crate) fn choose_mt_model(names: &[String]) -> Option<String> {
     };
     if let Some(n) = names
         .iter()
-        .find(|n| instructish(n) && !is_reasoning_model(n))
+        .find(|n| instructish(n) && !is_reasoning_model(n) && !is_coder_model(n))
+    {
+        return Some(n.clone());
+    }
+    if let Some(n) = names
+        .iter()
+        .find(|n| !is_reasoning_model(n) && !is_coder_model(n))
     {
         return Some(n.clone());
     }
@@ -250,11 +300,53 @@ pub(crate) fn choose_mt_model(names: &[String]) -> Option<String> {
     names.first().cloned()
 }
 
+struct MtModelPick {
+    model: String,
+    at: Instant,
+}
+
+static MT_MODEL: Mutex<Option<MtModelPick>> = Mutex::new(None);
+const MT_MODEL_TTL: Duration = Duration::from_secs(5 * 60);
+
+fn cached_mt_model() -> Option<String> {
+    let guard = MT_MODEL.lock().ok()?;
+    let hit = guard.as_ref()?;
+    if hit.at.elapsed() < MT_MODEL_TTL {
+        Some(hit.model.clone())
+    } else {
+        None
+    }
+}
+
+fn store_mt_model(model: String) {
+    if let Ok(mut guard) = MT_MODEL.lock() {
+        *guard = Some(MtModelPick {
+            model,
+            at: Instant::now(),
+        });
+    }
+}
+
+fn invalidate_mt_model() {
+    if let Ok(mut guard) = MT_MODEL.lock() {
+        *guard = None;
+    }
+}
+
 async fn pick_model(client: &reqwest::Client, base: &str) -> Result<String, String> {
+    if let Some(model) = cached_mt_model() {
+        return Ok(model);
+    }
     let names = crate::ollama::list_models(client, base)
         .await
-        .map_err(|e| map_ollama_err(e, base))?;
-    choose_mt_model(&names).ok_or_else(|| "no Ollama models — pull one for local MT".into())
+        .map_err(|e| {
+            invalidate_mt_model();
+            map_ollama_err(e, base)
+        })?;
+    let model = choose_mt_model(&names)
+        .ok_or_else(|| "no Ollama models — pull one for local MT".to_string())?;
+    store_mt_model(model.clone());
+    Ok(model)
 }
 
 fn map_ollama_err(err: impl std::fmt::Display, ollama_url: &str) -> String {
@@ -289,10 +381,12 @@ fn clean_translation(raw: &str, src: &str) -> String {
         .map(str::trim)
         .unwrap_or(&t)
         .to_string();
+    let src = src.trim();
     if t.eq_ignore_ascii_case(src) {
-        return t;
+        return String::new();
     }
-    t.lines()
+    t = t
+        .lines()
         .map(str::trim)
         .filter(|line| {
             !line.is_empty()
@@ -300,7 +394,12 @@ fn clean_translation(raw: &str, src: &str) -> String {
                 && !line.starts_with("Output ONLY")
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    if t.eq_ignore_ascii_case(src) {
+        String::new()
+    } else {
+        t
+    }
 }
 
 async fn generate(
@@ -317,13 +416,12 @@ async fn generate(
         "stream": false,
         "options": { "temperature": temperature, "num_predict": 512 }
     });
-    let res = client
-        .post(url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| map_ollama_err(e, base))?;
+    let res = client.post(url).json(&body).send().await.map_err(|e| {
+        invalidate_mt_model();
+        map_ollama_err(e, base)
+    })?;
     if !res.status().is_success() {
+        invalidate_mt_model();
         return Err(format!("Ollama HTTP {}", res.status()));
     }
     let v: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
@@ -336,7 +434,10 @@ async fn generate(
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_mt_model, clean_translation, detect_lang, lang_name, mt_prompt, normalize_lang};
+    use super::{
+        choose_mt_model, clean_translation, detect_lang, is_usable_translation, lang_name,
+        mt_prompt, mt_retry_prompt, normalize_lang, should_retry_mt,
+    };
 
     #[test]
     fn detects_spanish_from_marks_and_words() {
@@ -367,20 +468,52 @@ mod tests {
     }
 
     #[test]
-    fn prefers_translate_model_then_instruct_not_r1() {
+    fn prefers_translate_model_then_instruct_not_r1_or_coder() {
         let names = vec![
             "deepseek-r1:14b".into(),
             "qwen2.5-coder:14b".into(),
+            "llama3.1:8b".into(),
         ];
-        assert_eq!(choose_mt_model(&names).as_deref(), Some("qwen2.5-coder:14b"));
+        assert_eq!(choose_mt_model(&names).as_deref(), Some("llama3.1:8b"));
+        let only_specialized = vec!["deepseek-r1:14b".into(), "qwen2.5-coder:14b".into()];
+        assert_eq!(
+            choose_mt_model(&only_specialized).as_deref(),
+            Some("qwen2.5-coder:14b")
+        );
         let mt = vec!["llama3.2:3b".into(), "nllb-translate:latest".into()];
-        assert_eq!(choose_mt_model(&mt).as_deref(), Some("nllb-translate:latest"));
+        assert_eq!(
+            choose_mt_model(&mt).as_deref(),
+            Some("nllb-translate:latest")
+        );
     }
 
     #[test]
     fn strips_think_tags_and_labels() {
         let raw = "<think>plan</think>\nTranslation: Hello\n";
         assert_eq!(clean_translation(raw, "Hola"), "Hello");
+    }
+
+    #[test]
+    fn echo_and_empty_are_not_usable_or_cacheable() {
+        assert_eq!(clean_translation("Hola", "Hola"), "");
+        assert_eq!(clean_translation("hola", "Hola"), "");
+        assert_eq!(clean_translation("<think>still thinking", "Hola"), "");
+        assert_eq!(clean_translation("  Hola  ", "Hola"), "");
+        assert!(!is_usable_translation("", "Hola"));
+        assert!(!is_usable_translation("Hola", "Hola"));
+        assert!(!is_usable_translation("hola", "Hola"));
+        assert!(is_usable_translation("Hello", "Hola"));
+        assert!(should_retry_mt("Hola", "Hola"));
+        assert!(should_retry_mt("", "Hola"));
+        assert!(!should_retry_mt("Hello", "Hola"));
+    }
+
+    #[test]
+    fn retry_prompt_forbids_repeating_source() {
+        let p = mt_retry_prompt("es", "en", "Hola");
+        assert!(p.contains("Do not repeat the source"));
+        assert!(p.contains("Output only the translation"));
+        assert!(p.contains("Hola"));
     }
 
     #[test]
