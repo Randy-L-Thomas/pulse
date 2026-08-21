@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { wireSettings } from "./settings";
 import { setFullLayout, wireModules } from "./modules";
+import { wireFontSize } from "./ui-font";
 import { loadUi, saveUi, uiCache } from "./ui-store";
 import { wireTitlebarUpdate } from "./updater";
 
@@ -495,6 +496,7 @@ invoke<Snapshot>("get_snapshot")
   .catch((err) => toast(String(err)));
 wireSettings(toast);
 wireTitlebarUpdate(toast);
+wireFontSize(toast);
 wireModules(toast);
 loadUi()
   .then((ui) => {

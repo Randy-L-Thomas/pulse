@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { applyFontPx, currentFontPx, FONT_PX_DEFAULT } from "./ui-font";
 import { loadUi, saveUi, uiCache } from "./ui-store";
 
 type WindowInfo = { title: string; hwnd: number };
@@ -64,6 +65,7 @@ export function wireModules(toast: ToastFn) {
     ui.mt_enrich = false;
     ui.ollama_model = chatModel.value;
     ui.wa_title = ocrWin.value || ui.wa_title;
+    ui.font_px = currentFontPx();
     try {
       await saveUi();
     } catch (e) {
@@ -260,6 +262,7 @@ export function wireModules(toast: ToastFn) {
 
   loadUi()
     .then(async (s) => {
+      applyFontPx(s.font_px ?? FONT_PX_DEFAULT);
       mtFrom.value = pickLang(s.mt_from, "es");
       mtTo.value = pickLang(s.mt_to, "en");
       if (mtFrom.value === mtTo.value) {

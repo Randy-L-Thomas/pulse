@@ -8,6 +8,7 @@ export type UiState = {
   mt_enrich: boolean;
   ollama_model: string;
   ollama_url: string;
+  font_px?: number;
   cell_order: string[];
 };
 

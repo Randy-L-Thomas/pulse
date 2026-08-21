@@ -112,10 +112,21 @@ fn get_ui(state: tauri::State<'_, Arc<AppState>>) -> UiState {
 }
 
 #[tauri::command]
-fn save_ui(state: tauri::State<'_, Arc<AppState>>, ui: UiState) -> Result<(), String> {
+fn save_ui(state: tauri::State<'_, Arc<AppState>>, mut ui: UiState) -> Result<(), String> {
+    let mut guard = state.ui.lock().unwrap();
+    ui.font_px = ui_state::clamp_font_px(guard.font_px);
     ui_state::save(&ui)?;
-    *state.ui.lock().unwrap() = ui;
+    *guard = ui;
     Ok(())
+}
+
+#[tauri::command]
+fn set_font_px(state: tauri::State<'_, Arc<AppState>>, px: u32) -> Result<u32, String> {
+    let next = ui_state::clamp_font_px(px);
+    let mut ui = state.ui.lock().unwrap();
+    ui.font_px = next;
+    ui_state::save(&ui)?;
+    Ok(next)
 }
 
 #[tauri::command]
@@ -234,6 +245,7 @@ pub fn run() {
             app_meta,
             get_ui,
             save_ui,
+            set_font_px,
             list_app_windows,
             translate_text,
             capture_ocr,
