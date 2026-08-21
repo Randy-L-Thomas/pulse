@@ -25,7 +25,7 @@ npm run tauri build
 NSIS installer: `src-tauri\target\release\bundle\nsis\pulse_*_x64-setup.exe`  
 Portable zip: `pulse-*-windows-x64.zip` (exe only; WebView2 is already on Windows 10/11)
 
-Tag `v0.1.8` (or later) to have GitHub Actions publish a Release with the installer, `.sig`, `latest.json`, and portable zip.
+Tag `v0.1.9` (or later) to have GitHub Actions publish a Release with the installer, `.sig`, `latest.json`, and portable zip.
 
 The repo must be **public** for Settings → Update → Check now to work. GitHub keeps release assets private on a private repo, so the installed app cannot fetch `latest.json`. Auto-update reads `https://github.com/Randy-L-Thomas/pulse/releases/latest/download/latest.json`.
 
