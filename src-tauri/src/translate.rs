@@ -111,7 +111,7 @@ pub async fn translate(
     })
 }
 
-pub fn detect_lang(text: &str) -> &'static str {
+fn lang_hit_counts(text: &str) -> (usize, usize) {
     let t = text.to_lowercase();
     let marks = t.chars().filter(|c| "áéíóúñü¿¡".contains(*c)).count();
     let es = [
@@ -128,12 +128,44 @@ pub fn detect_lang(text: &str) -> &'static str {
     let en = ["the ", " and ", " you ", " that ", " with ", " this "];
     let es_hits = es.iter().filter(|w| t.contains(*w)).count() + marks;
     let en_hits = en.iter().filter(|w| t.contains(*w)).count();
-    if es_hits > en_hits {
-        "es"
-    } else if en_hits > 0 {
-        "en"
+    (es_hits, en_hits)
+}
+
+pub fn detect_lang(text: &str) -> &'static str {
+    detect_lang_confident(text).unwrap_or_else(|| {
+        let (es_hits, en_hits) = lang_hit_counts(text);
+        if es_hits > en_hits {
+            "es"
+        } else if en_hits > 0 {
+            "en"
+        } else {
+            "es"
+        }
+    })
+}
+
+/// Spanish marks/words vs English function words. `None` when short or ambiguous
+/// so the UI will not auto-swap (plain `detect_lang` still defaults unsure text to `"es"`).
+pub fn detect_lang_confident(text: &str) -> Option<&'static str> {
+    let trimmed = text.trim();
+    if trimmed.chars().count() < 12 {
+        return None;
+    }
+    let padded = format!(" {} ", trimmed.to_lowercase());
+    let (mut es_hits, mut en_hits) = lang_hit_counts(trimmed);
+    let es_func = [
+        " el ", " la ", " de ", " que ", " por ", " con ", " los ", " las ", " una ", " para ",
+    ];
+    let en_func = [" is ", " are ", " of ", " to ", " in ", " for "];
+    es_hits += es_func.iter().filter(|w| padded.contains(*w)).count();
+    en_hits += en_func.iter().filter(|w| padded.contains(*w)).count();
+    const MIN_HITS: usize = 2;
+    if es_hits >= MIN_HITS && es_hits > en_hits {
+        Some("es")
+    } else if en_hits >= MIN_HITS && en_hits > es_hits {
+        Some("en")
     } else {
-        "es"
+        None
     }
 }
 
@@ -440,8 +472,9 @@ async fn generate(
 #[cfg(test)]
 mod tests {
     use super::{
-        choose_mt_model, clean_translation, detect_lang, is_usable_translation, lang_name,
-        mt_prompt, mt_retry_prompt, normalize_lang, should_retry_mt,
+        choose_mt_model, clean_translation, detect_lang, detect_lang_confident,
+        is_usable_translation, lang_name, mt_prompt, mt_retry_prompt, normalize_lang,
+        should_retry_mt,
     };
 
     #[test]
@@ -452,6 +485,37 @@ mod tests {
     #[test]
     fn detects_english_from_common_words() {
         assert_eq!(detect_lang("The cat sat with you and that box."), "en");
+    }
+
+    #[test]
+    fn confident_detect_spanish_vs_english() {
+        assert_eq!(
+            detect_lang_confident("¿Cómo estás? Gracias por el mensaje."),
+            Some("es")
+        );
+        assert_eq!(
+            detect_lang_confident("Hola, gracias por el mensaje de ayer."),
+            Some("es")
+        );
+        assert_eq!(
+            detect_lang_confident("The cat sat with you and that box."),
+            Some("en")
+        );
+        assert_eq!(
+            detect_lang_confident("Please look at this with care today."),
+            Some("en")
+        );
+    }
+
+    #[test]
+    fn confident_detect_skips_short_and_ambiguous() {
+        assert_eq!(detect_lang_confident("Hola"), None);
+        assert_eq!(detect_lang_confident("Hi"), None);
+        assert_eq!(detect_lang_confident("ok"), None);
+        assert_eq!(detect_lang_confident("Hello there"), None);
+        assert_eq!(detect_lang_confident("xyz abc def ghi jkl"), None);
+        assert_eq!(detect_lang("Hello"), "es");
+        assert_eq!(detect_lang("ok"), "es");
     }
 
     #[test]

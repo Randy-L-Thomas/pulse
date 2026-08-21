@@ -26,6 +26,8 @@ export function wireModules(toast: ToastFn) {
   let mtInFlight = false;
   let mtQueued = false;
   let mtEpoch = 0;
+  let mtScrollLock = false;
+  let mtFromPaste = false;
 
   type TranslateOut = {
     text: string;
@@ -65,6 +67,38 @@ export function wireModules(toast: ToastFn) {
 
   function pickLang(value: string, fallback: string) {
     return value === "en" || value === "es" ? value : fallback;
+  }
+
+  function swapLangSelects() {
+    const from = pickLang(mtFrom.value, "es");
+    const to = pickLang(mtTo.value, "en");
+    mtFrom.value = to;
+    mtTo.value = from;
+  }
+
+  function syncMtScroll(from: HTMLTextAreaElement, to: HTMLTextAreaElement) {
+    if (mtScrollLock) return;
+    mtScrollLock = true;
+    to.scrollTop = from.scrollTop;
+    to.scrollLeft = from.scrollLeft;
+    requestAnimationFrame(() => {
+      mtScrollLock = false;
+    });
+  }
+
+  async function maybeSwapWrongPaste(text: string): Promise<string> {
+    const from = pickLang(mtFrom.value, "es");
+    let detected: string | null = null;
+    try {
+      detected = await invoke<string | null>("detect_mt_lang", { text });
+    } catch {
+      return "";
+    }
+    if (detected !== "es" && detected !== "en") return "";
+    if (detected === from) return "";
+    swapLangSelects();
+    void persist();
+    return `${pickLang(mtFrom.value, "es")}→${pickLang(mtTo.value, "en")}`;
   }
 
   function ollamaHostLabel(url: string): string {
@@ -170,13 +204,15 @@ export function wireModules(toast: ToastFn) {
         mtQueued = false;
         const epoch = mtEpoch;
         const source = mtSrc.value;
-        const from = pickLang(mtFrom.value, "es");
-        const to = pickLang(mtTo.value, "en");
         if (!source.trim()) {
           mtDst.value = "";
           setMtStatus("", "");
           break;
         }
+        const swappedTo = await maybeSwapWrongPaste(source);
+        if (epoch !== mtEpoch) break;
+        const from = pickLang(mtFrom.value, "es");
+        const to = pickLang(mtTo.value, "en");
         if (from === to) {
           mtDst.value = source.trim();
           setMtStatus("same", "ok");
@@ -200,7 +236,8 @@ export function wireModules(toast: ToastFn) {
             continue;
           }
           mtDst.value = out.text;
-          setMtStatus(formatMtDone(out), "ok");
+          syncMtScroll(mtSrc, mtDst);
+          setMtStatus(swappedTo ? `swapped to ${swappedTo}` : formatMtDone(out), "ok");
         } catch (e) {
           if (epoch !== mtEpoch) break;
           if (mtQueued) continue;
@@ -232,14 +269,14 @@ export function wireModules(toast: ToastFn) {
   modules.querySelectorAll<HTMLButtonElement>("[data-mod]").forEach((btn) => {
     btn.addEventListener("click", () => showMod(btn.dataset.mod || "translate"));
   });
+  mtSrc.addEventListener("scroll", () => syncMtScroll(mtSrc, mtDst));
+  mtDst.addEventListener("scroll", () => syncMtScroll(mtDst, mtSrc));
   document.getElementById("mt-swap")!.addEventListener("click", () => {
-    const from = pickLang(mtFrom.value, "es");
-    const to = pickLang(mtTo.value, "en");
-    mtFrom.value = to;
-    mtTo.value = from;
+    swapLangSelects();
     const src = mtSrc.value;
     mtSrc.value = mtDst.value;
     mtDst.value = src;
+    syncMtScroll(mtSrc, mtDst);
     void persist();
     void runTranslate();
   });
@@ -268,7 +305,18 @@ export function wireModules(toast: ToastFn) {
     void persist();
     void runTranslate();
   });
-  mtSrc.addEventListener("input", scheduleTranslate);
+  mtSrc.addEventListener("paste", () => {
+    mtFromPaste = true;
+    window.clearTimeout(mtTimer);
+  });
+  mtSrc.addEventListener("input", () => {
+    if (mtFromPaste) {
+      mtFromPaste = false;
+      void runTranslate();
+      return;
+    }
+    scheduleTranslate();
+  });
   mtSrc.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
       ev.preventDefault();
