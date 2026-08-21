@@ -147,6 +147,11 @@ async fn translate_text(
 }
 
 #[tauri::command]
+fn detect_mt_lang(text: String) -> Option<String> {
+    translate::detect_lang_confident(&text).map(|s| s.to_string())
+}
+
+#[tauri::command]
 fn capture_ocr(state: tauri::State<'_, Arc<AppState>>) -> Result<String, String> {
     let title = state.ui.lock().unwrap().wa_title.clone();
     winui::capture_and_ocr(&title)
@@ -248,6 +253,7 @@ pub fn run() {
             set_font_px,
             list_app_windows,
             translate_text,
+            detect_mt_lang,
             capture_ocr,
             ollama_models,
             ollama_chat
