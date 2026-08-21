@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
 import { runAppUpdate, updateErrorText } from "./updater";
+import { loadUi, saveUi } from "./ui-store";
 
 export type UtilCfg = { warn_pct: number; crit_pct: number };
 export type GpuCfg = UtilCfg & { vram_warn_pct: number; vram_crit_pct: number };
@@ -99,6 +100,9 @@ export function wireSettings(toast: ToastFn) {
     (document.getElementById("gpu-vram-warn") as HTMLInputElement).value = String(s.gpu.vram_warn_pct ?? 80);
     (document.getElementById("gpu-vram-crit") as HTMLInputElement).value = String(s.gpu.vram_crit_pct ?? 95);
     (document.getElementById("set-allow") as HTMLInputElement).value = (s.launch_allow || []).join(", ");
+    const ui = await loadUi();
+    (document.getElementById("set-ollama-url") as HTMLInputElement).value =
+      ui.ollama_url || "http://127.0.0.1:11434";
     const pinOn = document.getElementById("btn-pin")?.classList.contains("on") ?? true;
     document.getElementById("set-pin")!.classList.toggle("on", pinOn);
     try {
@@ -298,6 +302,11 @@ export function wireSettings(toast: ToastFn) {
     if (!snapshot) return;
     try {
       const msg = await invoke<string>("save_settings", { cfg: readForm() });
+      const ui = await loadUi();
+      ui.ollama_url =
+        (document.getElementById("set-ollama-url") as HTMLInputElement).value.trim() ||
+        "http://127.0.0.1:11434";
+      await saveUi();
       toast(msg);
       overlay.hidden = true;
     } catch (e) {

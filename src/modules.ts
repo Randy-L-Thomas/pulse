@@ -44,15 +44,29 @@ export function wireModules(toast: ToastFn) {
     return value === "en" || value === "es" ? value : fallback;
   }
 
-  function mtError(err: unknown) {
+  function ollamaHostLabel(url: string): string {
+    try {
+      const u = new URL(url);
+      return u.port ? `${u.hostname}:${u.port}` : u.hostname;
+    } catch {
+      return url.replace(/^https?:\/\//i, "").replace(/\/$/, "") || "127.0.0.1:11434";
+    }
+  }
+
+  function ollamaDownMsg(): string {
+    const url = uiCache()?.ollama_url || "http://127.0.0.1:11434";
+    return `Ollama not running on ${ollamaHostLabel(url)}`;
+  }
+
+  function ollamaError(err: unknown): string {
     const s = String(err);
-    if (/Ollama not running on 11434/i.test(s)) return "Ollama not running on 11434";
+    if (/^Ollama not running on /i.test(s)) return s;
     if (
       /connection refused|actively refused|tcp connect|error sending request|timed out|timeout|connect error|11434/i.test(
         s,
       )
     ) {
-      return "Ollama not running on 11434";
+      return ollamaDownMsg();
     }
     return s;
   }
@@ -118,7 +132,7 @@ export function wireModules(toast: ToastFn) {
       if (savedModel && names.includes(savedModel)) chatModel.value = savedModel;
       chatStatus.textContent = names.length ? `${names.length} models` : "no models";
     } catch (e) {
-      chatStatus.textContent = String(e);
+      chatStatus.textContent = ollamaError(e);
     }
   }
 
@@ -144,7 +158,7 @@ export function wireModules(toast: ToastFn) {
     } catch (e) {
       if (gen !== mtGen) return;
       mtDst.value = "";
-      mtStatus.textContent = mtError(e);
+      mtStatus.textContent = ollamaError(e);
     }
   }
 
@@ -253,7 +267,7 @@ export function wireModules(toast: ToastFn) {
       chatLog.scrollTop = chatLog.scrollHeight;
       chatStatus.textContent = "ok";
     } catch (e) {
-      chatStatus.textContent = String(e);
+      chatStatus.textContent = ollamaError(e);
     }
   });
   chatIn.addEventListener("keydown", (ev) => {

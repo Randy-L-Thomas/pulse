@@ -253,29 +253,12 @@ pub(crate) fn choose_mt_model(names: &[String]) -> Option<String> {
 async fn pick_model(client: &reqwest::Client, base: &str) -> Result<String, String> {
     let names = crate::ollama::list_models(client, base)
         .await
-        .map_err(map_ollama_err)?;
+        .map_err(|e| map_ollama_err(e, base))?;
     choose_mt_model(&names).ok_or_else(|| "no Ollama models — pull one for local MT".into())
 }
 
-fn map_ollama_err(err: impl std::fmt::Display) -> String {
-    let msg = err.to_string();
-    let l = msg.to_ascii_lowercase();
-    if l.contains("connection refused")
-        || l.contains("actively refused")
-        || l.contains("tcp connect")
-        || l.contains("error sending request")
-        || l.contains("timed out")
-        || l.contains("timeout")
-        || l.contains("connect error")
-        || l.contains("error waiting for response")
-    {
-        return "Ollama not running on 11434".into();
-    }
-    if msg.starts_with("Ollama") {
-        msg
-    } else {
-        format!("Ollama: {msg}")
-    }
+fn map_ollama_err(err: impl std::fmt::Display, ollama_url: &str) -> String {
+    crate::ollama::map_connect_err(err, ollama_url)
 }
 
 fn clean_translation(raw: &str, src: &str) -> String {
@@ -339,7 +322,7 @@ async fn generate(
         .json(&body)
         .send()
         .await
-        .map_err(map_ollama_err)?;
+        .map_err(|e| map_ollama_err(e, base))?;
     if !res.status().is_success() {
         return Err(format!("Ollama HTTP {}", res.status()));
     }
@@ -404,9 +387,14 @@ mod tests {
     fn connection_errors_are_plain() {
         assert_eq!(
             super::map_ollama_err(
-                "error sending request for url: tcp connect error: connection refused"
+                "error sending request for url: tcp connect error: connection refused",
+                "http://127.0.0.1:11434"
             ),
-            "Ollama not running on 11434"
+            "Ollama not running on 127.0.0.1:11434"
+        );
+        assert_eq!(
+            super::map_ollama_err("connection refused", "http://192.168.1.5:1234"),
+            "Ollama not running on 192.168.1.5:1234"
         );
     }
 
