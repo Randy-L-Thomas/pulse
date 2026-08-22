@@ -41,6 +41,127 @@ const SHORT_OK: &[&str] = &[
     "ok", "si", "sí", "no", "hola", "gracias", "jaja", "ja", "yes", "lol", "bye", "okis",
 ];
 
+/// One OCR line in the chat pane. `cx`/`cy` are 0..1 of the pane (left/top origin).
+#[derive(Clone, Debug)]
+pub struct OcrSpan {
+    pub text: String,
+    pub cx: f32,
+    pub cy: f32,
+}
+
+const ME_X: f32 = 0.56;
+const THEM_X: f32 = 0.44;
+const WRAP_DY: f32 = 0.07;
+
+pub fn format_wa_spans(spans: &[OcrSpan]) -> String {
+    let mut rows: Vec<(f32, f32, String)> = spans
+        .iter()
+        .filter_map(|s| clean_line(&s.text).map(|t| (s.cy, s.cx, t)))
+        .collect();
+    rows.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out = Vec::new();
+    let mut last_them = String::from("Them");
+    let mut i = 0;
+    while i < rows.len() {
+        let (cy, cx, text) = rows[i].clone();
+        let mine = is_mine(cx);
+        if !mine && is_speaker_name(&text) {
+            last_them = text;
+            i += 1;
+            continue;
+        }
+        let mut body = text;
+        let mut last_y = cy;
+        i += 1;
+        while i < rows.len() {
+            let (ny, nx, nt) = &rows[i];
+            if is_mine(*nx) != mine || *ny - last_y > WRAP_DY {
+                break;
+            }
+            if !mine && is_speaker_name(nt) {
+                break;
+            }
+            body.push(' ');
+            body.push_str(nt);
+            last_y = *ny;
+            i += 1;
+        }
+        if let Some(keep) = keep_message(&body) {
+            let who = if mine { "Me" } else { last_them.as_str() };
+            out.push(format!("{who}: {keep}"));
+        }
+    }
+    out.join("\n\n")
+}
+
+pub fn format_ocr(plain: &str, spans: &[OcrSpan]) -> String {
+    let labeled = format_wa_spans(spans);
+    if !labeled.is_empty() {
+        labeled
+    } else {
+        format_wa_ocr(plain)
+    }
+}
+
+fn is_mine(cx: f32) -> bool {
+    if cx >= ME_X {
+        true
+    } else if cx <= THEM_X {
+        false
+    } else {
+        cx >= 0.5
+    }
+}
+
+fn clean_line(raw: &str) -> Option<String> {
+    let stripped = strip_phrases(raw);
+    let mut toks = Vec::new();
+    for tok in stripped.split_whitespace() {
+        if is_separator(tok) || is_pulse_token(tok) {
+            continue;
+        }
+        toks.push(tok);
+    }
+    let s = toks.join(" ");
+    let s = s
+        .trim()
+        .trim_matches(|c: char| matches!(c, '\'' | '"' | '`' | ',' | '.' | ';'))
+        .trim();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
+fn is_speaker_name(s: &str) -> bool {
+    let words: Vec<&str> = s.split_whitespace().collect();
+    if words.is_empty() || words.len() > 3 {
+        return false;
+    }
+    if is_message_start(words[0]) {
+        return false;
+    }
+    let letters: String = s
+        .chars()
+        .filter(|c| c.is_alphabetic())
+        .collect::<String>()
+        .to_lowercase();
+    if SHORT_OK.contains(&letters.as_str()) {
+        return false;
+    }
+    if letters.len() < 2 || letters.len() > 24 {
+        return false;
+    }
+    if words.len() == 1 {
+        return true;
+    }
+    words.iter().all(|w| {
+        let alpha = w.chars().filter(|c| c.is_alphabetic()).count();
+        alpha >= 2 && w.chars().next().is_some_and(|c| c.is_uppercase())
+    })
+}
+
 pub fn looks_like_wa_ocr(raw: &str) -> bool {
     let lower = raw.to_ascii_lowercase();
     count_sub(&lower, "yesterday") >= 2
@@ -245,7 +366,7 @@ fn chrome_word_hits(raw: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_wa_ocr, looks_like_wa_ocr};
+    use super::{format_wa_ocr, format_wa_spans, looks_like_wa_ocr, OcrSpan};
 
     #[test]
     fn parses_sidebar_jumble_into_two_chat_lines() {
@@ -310,5 +431,72 @@ Buenas tardes tiene paquete hola buenas tardes y gracias";
         assert!(!looks_like_wa_ocr(
             "Can you translate this package note for me tomorrow?"
         ));
+    }
+
+    #[test]
+    fn right_bubble_is_me_left_is_them() {
+        let out = format_wa_spans(&[
+            OcrSpan {
+                text: "Buenas tardes tiene paquete".into(),
+                cx: 0.28,
+                cy: 0.20,
+            },
+            OcrSpan {
+                text: "ok".into(),
+                cx: 0.80,
+                cy: 0.40,
+            },
+        ]);
+        assert_eq!(
+            out,
+            "Them: Buenas tardes tiene paquete\n\nMe: ok"
+        );
+    }
+
+    #[test]
+    fn group_name_labels_following_left_bubbles() {
+        let out = format_wa_spans(&[
+            OcrSpan {
+                text: "Maria".into(),
+                cx: 0.22,
+                cy: 0.10,
+            },
+            OcrSpan {
+                text: "Buenas tardes tiene paquete".into(),
+                cx: 0.30,
+                cy: 0.18,
+            },
+            OcrSpan {
+                text: "hola buenas tardes y gracias".into(),
+                cx: 0.29,
+                cy: 0.42,
+            },
+            OcrSpan {
+                text: "ok".into(),
+                cx: 0.82,
+                cy: 0.60,
+            },
+        ]);
+        assert_eq!(
+            out,
+            "Maria: Buenas tardes tiene paquete\n\nMaria: hola buenas tardes y gracias\n\nMe: ok"
+        );
+    }
+
+    #[test]
+    fn wraps_nearby_same_side_lines_into_one_message() {
+        let out = format_wa_spans(&[
+            OcrSpan {
+                text: "Buenas tardes".into(),
+                cx: 0.28,
+                cy: 0.20,
+            },
+            OcrSpan {
+                text: "tiene paquete".into(),
+                cx: 0.30,
+                cy: 0.24,
+            },
+        ]);
+        assert_eq!(out, "Them: Buenas tardes tiene paquete");
     }
 }
