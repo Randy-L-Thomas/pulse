@@ -1,5 +1,6 @@
 mod config;
 mod launch;
+mod ocr_text;
 mod ollama;
 mod probes;
 mod translate;

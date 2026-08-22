@@ -264,6 +264,8 @@ mod imp {
         }
         let (bgra, w, h) = scale_bgra(bgra, w, h, OCR_MAX_W);
         let text = require_ocr_text(ocr_bgra(bgra, w, h)?)?;
+        let text = crate::ocr_text::format_wa_ocr(&text);
+        let text = require_ocr_text(text)?;
         Ok(OcrOut {
             text,
             source: title,
