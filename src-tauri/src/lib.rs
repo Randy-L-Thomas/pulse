@@ -1,5 +1,6 @@
 mod config;
 mod launch;
+mod mt_lex;
 mod ocr_text;
 mod ollama;
 mod probes;
@@ -24,6 +25,7 @@ struct AppState {
     snapshot: Mutex<Option<Snapshot>>,
     width: Mutex<WidthMode>,
     ui: Mutex<UiState>,
+    geom_lock: Mutex<bool>,
 }
 
 #[tauri::command]
@@ -56,11 +58,23 @@ fn set_width_mode(
     let cfg = state.cfg.lock().unwrap().clone();
     let m = match mode.as_str() {
         "full" => WidthMode::Full,
+        "custom" => WidthMode::Custom,
         _ => WidthMode::Half,
     };
+    *state.geom_lock.lock().unwrap() = true;
     *state.width.lock().unwrap() = m;
     window::dock_and_size(&win, &cfg, m)?;
-    let _ = app.emit("width-mode", if matches!(m, WidthMode::Full) { "full" } else { "half" });
+    if let Some((x, y, w, h)) = window::read_frame(&win) {
+        let mut ui = state.ui.lock().unwrap();
+        window::remember_frame(&mut ui, m, x, y, w, h);
+        let _ = ui_state::save(&ui);
+    }
+    let _ = app.emit("width-mode", m.as_str());
+    let unlock = Arc::clone(&state);
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(250));
+        *unlock.geom_lock.lock().unwrap() = false;
+    });
     Ok(())
 }
 
@@ -79,7 +93,7 @@ fn save_settings(
     *state.cfg.lock().unwrap() = cfg.clone();
     let mode = *state.width.lock().unwrap();
     if let Some(win) = app.get_webview_window("main") {
-        let _ = window::dock_and_size(&win, &cfg, mode);
+        restore_layout(&win, &cfg, mode, &state);
     }
     Ok(format!("saved {}", config::user_config_path().display()))
 }
@@ -94,9 +108,23 @@ fn apply_preset(
     *state.cfg.lock().unwrap() = cfg.clone();
     let mode = *state.width.lock().unwrap();
     if let Some(win) = app.get_webview_window("main") {
-        let _ = window::dock_and_size(&win, &cfg, mode);
+        restore_layout(&win, &cfg, mode, &state);
     }
     Ok(format!("preset {name}"))
+}
+
+fn restore_layout(
+    win: &tauri::WebviewWindow,
+    cfg: &Config,
+    mode: WidthMode,
+    state: &AppState,
+) {
+    if mode == WidthMode::Custom {
+        let ui = state.ui.lock().unwrap().clone();
+        let _ = window::apply_saved(win, cfg, &ui);
+    } else {
+        let _ = window::dock_and_size(win, cfg, mode);
+    }
 }
 
 #[tauri::command]
@@ -115,7 +143,12 @@ fn get_ui(state: tauri::State<'_, Arc<AppState>>) -> UiState {
 #[tauri::command]
 fn save_ui(state: tauri::State<'_, Arc<AppState>>, mut ui: UiState) -> Result<(), String> {
     let mut guard = state.ui.lock().unwrap();
-    ui.font_px = ui_state::clamp_font_px(guard.font_px);
+    ui.font_px = ui_state::clamp_font_px(ui.font_px);
+    ui.win_mode = guard.win_mode.clone();
+    ui.win_x = guard.win_x;
+    ui.win_y = guard.win_y;
+    ui.win_w = guard.win_w;
+    ui.win_h = guard.win_h;
     ui_state::save(&ui)?;
     *guard = ui;
     Ok(())
@@ -141,10 +174,10 @@ async fn translate_text(
     source: String,
     from: String,
     to: String,
-    enrich: bool,
+    llm: Option<bool>,
 ) -> Result<translate::TranslateOut, String> {
     let url = state.ui.lock().unwrap().ollama_url.clone();
-    translate::translate(&state.ollama, &url, &from, &to, &source, enrich).await
+    translate::translate(&state.ollama, &url, &from, &to, &source, llm.unwrap_or(false)).await
 }
 
 #[tauri::command]
@@ -211,6 +244,7 @@ pub fn run() {
         snapshot: Mutex::new(None),
         width: Mutex::new(WidthMode::Half),
         ui: Mutex::new(ui_state::load()),
+        geom_lock: Mutex::new(false),
     });
 
     tauri::Builder::default()
@@ -231,14 +265,42 @@ pub fn run() {
             winui::start_focus_watch();
             let win = app.get_webview_window("main").expect("main window");
             let cfg = state.cfg.lock().unwrap().clone();
-            let _ = window::dock_and_size(&win, &cfg, WidthMode::Half);
-            let clamp_win = win.clone();
+            let saved = state.ui.lock().unwrap().clone();
+            *state.geom_lock.lock().unwrap() = true;
+            let mode = window::apply_saved(&win, &cfg, &saved).unwrap_or(WidthMode::Half);
+            *state.width.lock().unwrap() = mode;
+            let _ = app.handle().emit("width-mode", mode.as_str());
+            let unlock = state.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(250));
+                *unlock.geom_lock.lock().unwrap() = false;
+            });
+            let geom_win = win.clone();
             let loop_state = state.clone();
             win.on_window_event(move |ev| {
-                if matches!(ev, tauri::WindowEvent::Resized(_)) {
-                    let cfg = loop_state.cfg.lock().unwrap().clone();
-                    window::clamp_resize(&clamp_win, &cfg);
+                if !matches!(
+                    ev,
+                    tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)
+                ) {
+                    return;
                 }
+                if *loop_state.geom_lock.lock().unwrap() {
+                    return;
+                }
+                let Some((x, y, w, h)) = window::read_frame(&geom_win) else {
+                    return;
+                };
+                if !window::frame_is_sane(w, h) {
+                    return;
+                }
+                let mut width = loop_state.width.lock().unwrap();
+                if !matches!(*width, WidthMode::Custom) {
+                    *width = WidthMode::Custom;
+                    let _ = geom_win.emit("width-mode", "custom");
+                }
+                let mut ui = loop_state.ui.lock().unwrap();
+                window::remember_frame(&mut ui, WidthMode::Custom, x, y, w, h);
+                let _ = ui_state::save(&ui);
             });
             let handle = app.handle().clone();
             let probe_state = state.clone();

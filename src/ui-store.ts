@@ -10,6 +10,7 @@ export type UiState = {
   ollama_url: string;
   font_px?: number;
   cell_order: string[];
+  win_mode?: string;
 };
 
 let cache: UiState | null = null;

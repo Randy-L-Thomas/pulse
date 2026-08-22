@@ -57,6 +57,7 @@
             <button type="button" id="mt-copy" class="tb">Copy</button>
             <button type="button" id="mt-clear" class="tb mt-clear">Clear</button>
             <button type="button" id="mt-follow" class="tb" aria-pressed="false" title="Re-OCR the bound WhatsApp chat as you scroll and keep Translate updated">Follow</button>
+            <button type="button" id="mt-llm" class="tb" title="Run Ollama on the current source (off by default)">LLM</button>
             <span id="mt-status" class="mt-status" role="status" aria-live="polite"></span>
           </div>
           <div class="mt-cols">
@@ -165,6 +166,16 @@
       </footer>
     </div>
     <div id="toast" class="toast" hidden></div>
+    <div id="grips" aria-hidden="true">
+      <button type="button" class="grip n" data-resize="north" tabindex="-1"></button>
+      <button type="button" class="grip s" data-resize="south" tabindex="-1"></button>
+      <button type="button" class="grip e" data-resize="east" tabindex="-1"></button>
+      <button type="button" class="grip w" data-resize="west" tabindex="-1"></button>
+      <button type="button" class="grip ne" data-resize="northEast" tabindex="-1"></button>
+      <button type="button" class="grip nw" data-resize="northWest" tabindex="-1"></button>
+      <button type="button" class="grip se" data-resize="southEast" tabindex="-1"></button>
+      <button type="button" class="grip sw" data-resize="southWest" tabindex="-1"></button>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
