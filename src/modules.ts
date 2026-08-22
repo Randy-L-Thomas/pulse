@@ -336,7 +336,7 @@ export function wireModules(toast: ToastFn) {
     ocrStatus.textContent = "ocr…";
     try {
       await persist();
-      const text = await invoke<string>("capture_ocr");
+      const text = await invoke<string>("capture_ocr", { title: ocrWin.value });
       ocrOut.value = text;
       ocrStatus.textContent = text.trim() ? "ok" : "empty";
     } catch (e) {
