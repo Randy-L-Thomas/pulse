@@ -1,0 +1,19 @@
+---
+description: Translate default is lexicon only. Ollama runs only when the user clicks LLM.
+alwaysApply: true
+---
+
+# Translate contract (do not flip)
+
+Default / Go / Follow / paste / type / lang change = lexicon only (`llm: false`). **LLM** is the only path that sends `llm: true`.
+
+Do **not** reintroduce `scheduleLlm`, `overlayLlm`, `llmTimer`, or status `lex · llm…`. Do not auto-fire Ollama after lex to "fix quality." Do not change this contract unless Randy says so in chat.
+
+```typescript
+// BAD
+setMtStatus("lex · llm…", "busy");
+scheduleLlm(source, from, to, epoch, 350);
+
+// GOOD
+setMtStatus("lex", "ok");
+```

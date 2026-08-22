@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { AUTO_LLM_AFTER_LEX, mergeQueuedLlm } from "./mt_policy";
 import { applyFontPx, currentFontPx, FONT_PX_DEFAULT } from "./ui-font";
 import { loadUi, saveUi, uiCache } from "./ui-store";
 
@@ -25,10 +26,10 @@ export function wireModules(toast: ToastFn) {
   let mtTimer = 0;
   let mtInFlight = false;
   let mtQueued = false;
+  let mtQueuedLlm = false;
   let mtEpoch = 0;
   let mtScrollLock = false;
   let mtFromPaste = false;
-  let llmTimer = 0;
   let followTimer = 0;
   let followOn = false;
   let followLast = "";
@@ -200,14 +201,23 @@ export function wireModules(toast: ToastFn) {
   }
 
   async function runTranslate(llm = false) {
+    if (AUTO_LLM_AFTER_LEX) {
+      throw new Error("auto LLM after lex is forbidden");
+    }
     if (mtInFlight) {
       mtQueued = true;
+      mtQueuedLlm = mergeQueuedLlm(mtQueuedLlm, llm);
       return;
     }
     mtInFlight = true;
+    let useLlm = llm;
     try {
       do {
+        if (mtQueued) {
+          useLlm = mtQueuedLlm;
+        }
         mtQueued = false;
+        mtQueuedLlm = false;
         const epoch = mtEpoch;
         const source = mtSrc.value;
         if (!source.trim()) {
@@ -232,7 +242,7 @@ export function wireModules(toast: ToastFn) {
             source,
             from,
             to,
-            llm,
+            llm: useLlm,
           });
           if (epoch !== mtEpoch) break;
           if (mtQueued) continue;
@@ -245,14 +255,13 @@ export function wireModules(toast: ToastFn) {
           }
           mtDst.value = out.text;
           syncMtScroll(mtSrc, mtDst);
-          if (llm) {
+          if (useLlm) {
             setMtStatus(
               swappedTo ? `swapped to ${swappedTo}` : `llm · ${formatMtDone(out)}`,
               "ok",
             );
           } else {
-            setMtStatus(swappedTo ? `swapped to ${swappedTo}` : "lex · llm…", "busy");
-            scheduleLlm(source, from, to, epoch, followOn ? 1400 : 350);
+            setMtStatus(swappedTo ? `swapped to ${swappedTo}` : "lex", "ok");
           }
         } catch (e) {
           if (epoch !== mtEpoch) break;
@@ -264,7 +273,7 @@ export function wireModules(toast: ToastFn) {
           ) {
             continue;
           }
-          if (llm) {
+          if (useLlm) {
             setMtStatus(ollamaError(e), "err");
           } else {
             mtDst.value = "";
@@ -275,8 +284,10 @@ export function wireModules(toast: ToastFn) {
     } finally {
       mtInFlight = false;
       if (mtQueued) {
+        const again = mtQueuedLlm;
         mtQueued = false;
-        void runTranslate();
+        mtQueuedLlm = false;
+        void runTranslate(again);
       }
     }
   }
@@ -284,33 +295,6 @@ export function wireModules(toast: ToastFn) {
   function scheduleTranslate() {
     window.clearTimeout(mtTimer);
     mtTimer = window.setTimeout(() => void runTranslate(), 450);
-  }
-
-  function scheduleLlm(source: string, from: string, to: string, epoch: number, delay: number) {
-    window.clearTimeout(llmTimer);
-    llmTimer = window.setTimeout(() => void overlayLlm(source, from, to, epoch), delay);
-  }
-
-  async function overlayLlm(source: string, from: string, to: string, epoch: number) {
-    if (epoch !== mtEpoch) return;
-    if (mtSrc.value !== source) return;
-    if (pickLang(mtFrom.value, "es") !== from || pickLang(mtTo.value, "en") !== to) return;
-    try {
-      const out = await invoke<TranslateOut>("translate_text", {
-        source,
-        from,
-        to,
-        llm: true,
-      });
-      if (epoch !== mtEpoch || mtSrc.value !== source) return;
-      if (!out.text.trim()) return;
-      mtDst.value = out.text;
-      syncMtScroll(mtSrc, mtDst);
-      setMtStatus(formatMtDone(out), "ok");
-    } catch (e) {
-      if (epoch !== mtEpoch) return;
-      setMtStatus(`lex · ${ollamaError(e)}`, "err");
-    }
   }
 
   modules.querySelectorAll<HTMLButtonElement>("[data-mod]").forEach((btn) => {
@@ -340,7 +324,7 @@ export function wireModules(toast: ToastFn) {
   document.getElementById("mt-clear")!.addEventListener("click", () => {
     mtEpoch += 1;
     mtQueued = false;
-    window.clearTimeout(llmTimer);
+    mtQueuedLlm = false;
     stopFollow();
     mtSrc.value = "";
     mtDst.value = "";
