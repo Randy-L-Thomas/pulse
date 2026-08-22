@@ -31,7 +31,7 @@ fn save_cache(cache: &Cache) {
 
 fn key(from: &str, to: &str, text: &str) -> String {
     let mut h = Sha256::new();
-    h.update(b"es-MX|en-US|v3|");
+    h.update(b"es-MX|en-US|v4|");
     h.update(from.as_bytes());
     h.update(b"|");
     h.update(to.as_bytes());
@@ -576,6 +576,17 @@ mod tests {
     fn strips_think_tags_and_labels() {
         let raw = "<think>plan</think>\nTranslation: Hello\n";
         assert_eq!(clean_translation(raw, "Hola"), "Hello");
+    }
+
+    #[test]
+    fn prepare_source_strips_pulse_leftover_without_reocr() {
+        let raw = "Buenas tardes tiene paquete\n\n\
+hola buenas Tardes y gracias' 22AUG26 CAM-MCP stdio CAM @.3.35 118 ms • ui down • task ? RAM 2 ms ICE 2 ms ui down ws-ops task ? no\n\n\
+TRANSLATE WhatsApp Open chat HTTP — stdio only XSIAM-OPS";
+        assert_eq!(
+            super::prepare_source(raw),
+            "Buenas tardes tiene paquete\n\nhola buenas Tardes y gracias"
+        );
     }
 
     #[test]
