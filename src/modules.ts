@@ -28,6 +28,7 @@ export function wireModules(toast: ToastFn) {
   let mtEpoch = 0;
   let mtScrollLock = false;
   let mtFromPaste = false;
+  let llmTimer = 0;
   let followTimer = 0;
   let followOn = false;
   let followLast = "";
@@ -244,10 +245,15 @@ export function wireModules(toast: ToastFn) {
           }
           mtDst.value = out.text;
           syncMtScroll(mtSrc, mtDst);
-          setMtStatus(
-            swappedTo ? `swapped to ${swappedTo}` : llm ? `llm · ${formatMtDone(out)}` : formatMtDone(out),
-            "ok",
-          );
+          if (llm) {
+            setMtStatus(
+              swappedTo ? `swapped to ${swappedTo}` : `llm · ${formatMtDone(out)}`,
+              "ok",
+            );
+          } else {
+            setMtStatus(swappedTo ? `swapped to ${swappedTo}` : "lex · llm…", "busy");
+            scheduleLlm(source, from, to, epoch, followOn ? 1400 : 350);
+          }
         } catch (e) {
           if (epoch !== mtEpoch) break;
           if (mtQueued) continue;
@@ -258,8 +264,12 @@ export function wireModules(toast: ToastFn) {
           ) {
             continue;
           }
-          mtDst.value = "";
-          setMtStatus(ollamaError(e), "err");
+          if (llm) {
+            setMtStatus(ollamaError(e), "err");
+          } else {
+            mtDst.value = "";
+            setMtStatus(ollamaError(e), "err");
+          }
         }
       } while (mtQueued);
     } finally {
@@ -274,6 +284,33 @@ export function wireModules(toast: ToastFn) {
   function scheduleTranslate() {
     window.clearTimeout(mtTimer);
     mtTimer = window.setTimeout(() => void runTranslate(), 450);
+  }
+
+  function scheduleLlm(source: string, from: string, to: string, epoch: number, delay: number) {
+    window.clearTimeout(llmTimer);
+    llmTimer = window.setTimeout(() => void overlayLlm(source, from, to, epoch), delay);
+  }
+
+  async function overlayLlm(source: string, from: string, to: string, epoch: number) {
+    if (epoch !== mtEpoch) return;
+    if (mtSrc.value !== source) return;
+    if (pickLang(mtFrom.value, "es") !== from || pickLang(mtTo.value, "en") !== to) return;
+    try {
+      const out = await invoke<TranslateOut>("translate_text", {
+        source,
+        from,
+        to,
+        llm: true,
+      });
+      if (epoch !== mtEpoch || mtSrc.value !== source) return;
+      if (!out.text.trim()) return;
+      mtDst.value = out.text;
+      syncMtScroll(mtSrc, mtDst);
+      setMtStatus(formatMtDone(out), "ok");
+    } catch (e) {
+      if (epoch !== mtEpoch) return;
+      setMtStatus(`lex · ${ollamaError(e)}`, "err");
+    }
   }
 
   modules.querySelectorAll<HTMLButtonElement>("[data-mod]").forEach((btn) => {
@@ -303,6 +340,7 @@ export function wireModules(toast: ToastFn) {
   document.getElementById("mt-clear")!.addEventListener("click", () => {
     mtEpoch += 1;
     mtQueued = false;
+    window.clearTimeout(llmTimer);
     stopFollow();
     mtSrc.value = "";
     mtDst.value = "";
