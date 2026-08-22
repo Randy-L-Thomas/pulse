@@ -155,7 +155,7 @@ fn detect_mt_lang(text: String) -> Option<String> {
 async fn capture_ocr(
     state: tauri::State<'_, Arc<AppState>>,
     title: Option<String>,
-) -> Result<String, String> {
+) -> Result<winui::OcrOut, String> {
     let saved = state.ui.lock().unwrap().wa_title.clone();
     let title = title.unwrap_or_default();
     let title = if title.trim().is_empty() {
@@ -227,6 +227,7 @@ pub fn run() {
         .manage(state.clone())
         .setup(move |app| {
             ensure_default_autostart(app.handle());
+            winui::start_focus_watch();
             let win = app.get_webview_window("main").expect("main window");
             let cfg = state.cfg.lock().unwrap().clone();
             let _ = window::dock_and_size(&win, &cfg, WidthMode::Half);
