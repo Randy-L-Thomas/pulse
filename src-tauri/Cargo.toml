@@ -1,6 +1,6 @@
 [package]
 name = "pulse"
-version = "0.1.18"
+version = "0.1.19"
 description = "Strip health dashboard"
 authors = ["Randy"]
 edition = "2021"
