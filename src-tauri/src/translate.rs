@@ -31,7 +31,7 @@ fn save_cache(cache: &Cache) {
 
 fn key(from: &str, to: &str, text: &str) -> String {
     let mut h = Sha256::new();
-    h.update(b"es-MX|en-US|v4|");
+    h.update(b"es-MX|en-US|v5|");
     h.update(from.as_bytes());
     h.update(b"|");
     h.update(to.as_bytes());
@@ -208,7 +208,8 @@ American English: US spelling and vocabulary (color, truck, apartment, cell phon
 Never British-only forms (colour, lorry, flat, mobile, lift, football).\n\
 If the source has multiple chat lines, translate each non-empty line onto its own line. \
 Keep a blank line between messages. Do not merge them into one paragraph or invent extra sentences.\n\
-Output ONLY the translation. No quotes, labels, notes, or extra lines.\n\n{}",
+If a line starts with a speaker label (Me:, Them:, or a name then a colon), copy that label exactly and translate only the words after it.\n\
+Output ONLY the translation. No quotes, notes, or extra lines.\n\n{}",
         lang_name(from),
         lang_name(to),
         src
@@ -550,6 +551,7 @@ mod tests {
         assert!(p.contains("lorry"));
         assert!(p.contains("Hola"));
         assert!(p.contains("each non-empty line"));
+        assert!(p.contains("speaker label"));
     }
 
     #[test]

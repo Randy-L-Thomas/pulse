@@ -28,6 +28,10 @@ export function wireModules(toast: ToastFn) {
   let mtEpoch = 0;
   let mtScrollLock = false;
   let mtFromPaste = false;
+  let followTimer = 0;
+  let followOn = false;
+  let followLast = "";
+  let followBusy = false;
 
   type TranslateOut = {
     text: string;
@@ -293,9 +297,56 @@ export function wireModules(toast: ToastFn) {
   document.getElementById("mt-clear")!.addEventListener("click", () => {
     mtEpoch += 1;
     mtQueued = false;
+    stopFollow();
     mtSrc.value = "";
     mtDst.value = "";
     setMtStatus("", "");
+  });
+
+  const mtFollow = document.getElementById("mt-follow") as HTMLButtonElement;
+
+  function setFollowUi(on: boolean) {
+    followOn = on;
+    mtFollow.classList.toggle("on", on);
+    mtFollow.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+
+  function stopFollow() {
+    window.clearInterval(followTimer);
+    followTimer = 0;
+    followLast = "";
+    setFollowUi(false);
+  }
+
+  async function followTick() {
+    if (!followOn || followBusy) return;
+    followBusy = true;
+    try {
+      const out = await invoke<{ text: string; source: string }>("capture_ocr", {
+        title: ocrWin.value,
+      });
+      const text = out.text.trim();
+      if (!text || text === followLast) return;
+      followLast = text;
+      mtSrc.value = text;
+      void runTranslate();
+    } catch (e) {
+      setMtStatus(String(e), "err");
+    } finally {
+      followBusy = false;
+    }
+  }
+
+  mtFollow.addEventListener("click", () => {
+    if (followOn) {
+      stopFollow();
+      return;
+    }
+    setFollowUi(true);
+    showMod("translate");
+    setMtStatus("follow", "busy");
+    void followTick();
+    followTimer = window.setInterval(() => void followTick(), 700);
   });
   mtFrom.addEventListener("change", () => {
     void persist();

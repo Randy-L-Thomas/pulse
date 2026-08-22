@@ -97,6 +97,33 @@ pub(crate) fn crop_bgra(
     (out, cw, ch)
 }
 
+/// Paint a rectangle black so overlay chrome (Pulse) is not OCR-ed.
+pub(crate) fn mask_bgra(bgra: &mut [u8], bw: u32, bh: u32, x: i32, y: i32, cw: i32, ch: i32) {
+    if bw == 0 || bh == 0 || cw <= 0 || ch <= 0 {
+        return;
+    }
+    let x0 = x.clamp(0, bw as i32) as u32;
+    let y0 = y.clamp(0, bh as i32) as u32;
+    let x1 = (x + cw).clamp(0, bw as i32) as u32;
+    let y1 = (y + ch).clamp(0, bh as i32) as u32;
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    for row in y0..y1 {
+        let start = (row * bw + x0) as usize * 4;
+        let end = (row * bw + x1) as usize * 4;
+        if end > bgra.len() {
+            break;
+        }
+        for px in bgra[start..end].chunks_exact_mut(4) {
+            px[0] = 0;
+            px[1] = 0;
+            px[2] = 0;
+            px[3] = 255;
+        }
+    }
+}
+
 /// Nearest-neighbor shrink so WinRT OCR is not chewing a 4K desktop for 15s.
 pub(crate) fn scale_bgra(bgra: Vec<u8>, w: u32, h: u32, max_w: u32) -> (Vec<u8>, u32, u32) {
     if w == 0 || h == 0 || w <= max_w {
@@ -139,7 +166,7 @@ pub fn start_focus_watch() {}
 #[cfg(windows)]
 mod imp {
     use super::{
-        chat_pane_crop, crop_bgra, is_blank_bgra, looks_like_whatsapp, pick_largest_hwnd,
+        chat_pane_crop, crop_bgra, is_blank_bgra, looks_like_whatsapp, mask_bgra, pick_largest_hwnd,
         require_ocr_text, scale_bgra, OcrOut, WindowInfo,
     };
     use std::mem::size_of;
@@ -172,7 +199,7 @@ mod imp {
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetAncestor, GetClientRect, GetForegroundWindow, GetWindowRect,
         GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-        SetForegroundWindow, ShowWindow, GA_ROOT, SW_HIDE, SW_RESTORE, SW_SHOWNOACTIVATE,
+        SetForegroundWindow, ShowWindow, GA_ROOT, SW_RESTORE,
     };
 
     const MIN_CLIENT_W: i32 = 120;
@@ -254,13 +281,9 @@ mod imp {
         }
         let title = window_title(hwnd);
         let exe = exe_path(hwnd);
-        // DXGI copies the composed desktop. Pulse is always-on-top, so hide it
-        // or the chat bitmap includes CAM-MCP / TRANSLATE / ui down.
-        let hidden = hide_own_windows();
-        std::thread::sleep(Duration::from_millis(80));
-        let grabbed = grab_bgra(hwnd);
-        restore_windows(&hidden);
-        let (mut bgra, mut w, mut h) = grabbed?;
+        let win = window_bounds(hwnd)?;
+        let (mut bgra, mut w, mut h) = grab_bgra(hwnd)?;
+        mask_own_over(&mut bgra, w, h, win);
         if looks_like_whatsapp(&title, &exe) {
             let (x, y, cw, ch) = chat_pane_crop(w, h);
             let cropped = crop_bgra(&bgra, w, h, x, y, cw, ch);
@@ -269,9 +292,8 @@ mod imp {
             }
         }
         let (bgra, w, h) = scale_bgra(bgra, w, h, OCR_MAX_W);
-        let text = require_ocr_text(ocr_bgra(bgra, w, h)?)?;
-        let text = crate::ocr_text::format_wa_ocr(&text);
-        let text = require_ocr_text(text)?;
+        let (plain, spans) = ocr_spans(bgra, w, h)?;
+        let text = require_ocr_text(crate::ocr_text::format_ocr(&plain, &spans))?;
         Ok(OcrOut {
             text,
             source: title,
@@ -537,7 +559,7 @@ mod imp {
         BOOL(1)
     }
 
-    fn hide_own_windows() -> Vec<HWND> {
+    fn own_window_rects() -> Vec<RECT> {
         let mut data = OwnWindows {
             pid: unsafe { GetCurrentProcessId() },
             hwnds: Vec::new(),
@@ -547,18 +569,24 @@ mod imp {
                 Some(own_visible_proc),
                 LPARAM(&mut data as *mut _ as isize),
             );
-            for &hwnd in &data.hwnds {
-                let _ = ShowWindow(hwnd, SW_HIDE);
-            }
         }
         data.hwnds
+            .into_iter()
+            .filter_map(|hwnd| window_bounds(hwnd).ok())
+            .collect()
     }
 
-    fn restore_windows(hwnds: &[HWND]) {
-        for &hwnd in hwnds {
-            unsafe {
-                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-            }
+    fn mask_own_over(bgra: &mut [u8], w: u32, h: u32, win: RECT) {
+        for hole in own_window_rects() {
+            mask_bgra(
+                bgra,
+                w,
+                h,
+                hole.left - win.left,
+                hole.top - win.top,
+                hole.right - hole.left,
+                hole.bottom - hole.top,
+            );
         }
     }
 
@@ -683,7 +711,11 @@ mod imp {
         OcrEngine::TryCreateFromUserProfileLanguages().map_err(|e| e.to_string())
     }
 
-    fn ocr_bgra(bgra: Vec<u8>, w: u32, h: u32) -> Result<String, String> {
+    fn ocr_spans(
+        bgra: Vec<u8>,
+        w: u32,
+        h: u32,
+    ) -> Result<(String, Vec<crate::ocr_text::OcrSpan>), String> {
         let bmp_bytes = bgra_to_bmp32(&bgra, w, h);
         let stream = InMemoryRandomAccessStream::new().map_err(|e| e.to_string())?;
         let writer = DataWriter::CreateDataWriter(&stream).map_err(|e| e.to_string())?;
@@ -710,8 +742,46 @@ mod imp {
             .map_err(|e| e.to_string())?
             .get()
             .map_err(|e| e.to_string())?;
-        let text = result.Text().map_err(|e| e.to_string())?;
-        Ok(text.to_string())
+        let plain = result.Text().map_err(|e| e.to_string())?.to_string();
+        let mut spans = Vec::new();
+        if let Ok(lines) = result.Lines() {
+            for line in lines {
+                let Ok(text) = line.Text() else { continue };
+                let text = text.to_string();
+                if text.trim().is_empty() {
+                    continue;
+                }
+                let (cx, cy) = line_center(&line, w, h);
+                spans.push(crate::ocr_text::OcrSpan { text, cx, cy });
+            }
+        }
+        Ok((plain, spans))
+    }
+
+    fn line_center(line: &windows::Media::Ocr::OcrLine, w: u32, h: u32) -> (f32, f32) {
+        let Ok(words) = line.Words() else {
+            return (0.5, 0.5);
+        };
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        let mut max_x = 0.0f32;
+        let mut max_y = 0.0f32;
+        let mut any = false;
+        for word in words {
+            let Ok(r) = word.BoundingRect() else { continue };
+            any = true;
+            min_x = min_x.min(r.X);
+            min_y = min_y.min(r.Y);
+            max_x = max_x.max(r.X + r.Width);
+            max_y = max_y.max(r.Y + r.Height);
+        }
+        if !any || w == 0 || h == 0 {
+            return (0.5, 0.5);
+        }
+        (
+            ((min_x + max_x) * 0.5 / w as f32).clamp(0.0, 1.0),
+            ((min_y + max_y) * 0.5 / h as f32).clamp(0.0, 1.0),
+        )
     }
 
     fn bgra_to_bmp32(bgra: &[u8], w: u32, h: u32) -> Vec<u8> {
@@ -742,7 +812,7 @@ pub use imp::{capture_and_ocr, list_windows, pop_cursor, start_focus_watch};
 #[cfg(test)]
 mod tests {
     use super::{
-        chat_pane_crop, crop_bgra, is_blank_bgra, looks_like_whatsapp, pick_largest_hwnd,
+        chat_pane_crop, crop_bgra, is_blank_bgra, looks_like_whatsapp, mask_bgra, pick_largest_hwnd,
         require_ocr_text, scale_bgra,
     };
 
@@ -830,5 +900,14 @@ mod tests {
         let (out, w, h) = crop_bgra(&src, 4, 3, 2, 0, 2, 1);
         assert_eq!((w, h), (2, 1));
         assert_eq!(out[0], 9);
+    }
+
+    #[test]
+    fn mask_bgra_blacks_out_the_overlay() {
+        let mut src = vec![9u8; 4 * 2 * 4];
+        mask_bgra(&mut src, 4, 2, 1, 0, 2, 1);
+        assert_eq!(&src[4..8], &[0, 0, 0, 255]);
+        assert_eq!(src[0], 9);
+        assert_eq!(src[12], 9);
     }
 }
