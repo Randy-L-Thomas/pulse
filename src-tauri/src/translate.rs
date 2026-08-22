@@ -652,6 +652,21 @@ TRANSLATE WhatsApp Open chat HTTP — stdio only XSIAM-OPS";
     }
 
     #[tokio::test]
+    async fn lex_chat_labels_do_not_need_ollama() {
+        let client = reqwest::Client::new();
+        let src = "Me: hola\n\nThem: Buenas tardes tiene paquete";
+        let out = super::translate(&client, "http://127.0.0.1:9", "es", "en", src, false)
+            .await
+            .unwrap();
+        assert_eq!(out.engine, "lex");
+        assert_eq!(out.model, None);
+        assert_eq!(
+            out.text,
+            "Me: Hello\n\nThem: Good afternoon, you have a package"
+        );
+    }
+
+    #[tokio::test]
     async fn same_language_returns_source() {
         let client = reqwest::Client::new();
         let out = super::translate(&client, "http://127.0.0.1:9", "es", "es", "Hola", false)

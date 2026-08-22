@@ -483,6 +483,82 @@ Buenas tardes tiene paquete hola buenas tardes y gracias";
         );
     }
 
+    fn fixture(name: &str) -> &'static str {
+        match name {
+            "sidebar_jumble.txt" => {
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/wa_ocr/sidebar_jumble.txt"
+                ))
+            }
+            "sidebar_jumble.expected.txt" => {
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/wa_ocr/sidebar_jumble.expected.txt"
+                ))
+            }
+            "pulse_leak.txt" => {
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/wa_ocr/pulse_leak.txt"
+                ))
+            }
+            "pulse_leak.expected.txt" => {
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/wa_ocr/pulse_leak.expected.txt"
+                ))
+            }
+            "spans_me_them.txt" => {
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/wa_ocr/spans_me_them.txt"
+                ))
+            }
+            "spans_me_them.expected.txt" => {
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/wa_ocr/spans_me_them.expected.txt"
+                ))
+            }
+            _ => panic!("unknown fixture {name}"),
+        }
+    }
+
+    fn load_spans(raw: &str) -> Vec<OcrSpan> {
+        raw.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(|l| {
+                let mut parts = l.splitn(3, ' ');
+                let cx: f32 = parts.next().unwrap().parse().unwrap();
+                let cy: f32 = parts.next().unwrap().parse().unwrap();
+                let text = parts.next().unwrap().to_string();
+                OcrSpan { text, cx, cy }
+            })
+            .collect()
+    }
+
+    fn norm(s: &str) -> String {
+        s.replace("\r\n", "\n").trim().to_string()
+    }
+
+    #[test]
+    fn golden_wa_ocr_fixtures() {
+        assert_eq!(
+            norm(&format_wa_ocr(fixture("sidebar_jumble.txt"))),
+            norm(fixture("sidebar_jumble.expected.txt"))
+        );
+        assert_eq!(
+            norm(&format_wa_ocr(fixture("pulse_leak.txt"))),
+            norm(fixture("pulse_leak.expected.txt"))
+        );
+        assert_eq!(
+            norm(&format_wa_spans(&load_spans(fixture("spans_me_them.txt")))),
+            norm(fixture("spans_me_them.expected.txt"))
+        );
+    }
+
     #[test]
     fn wraps_nearby_same_side_lines_into_one_message() {
         let out = format_wa_spans(&[
