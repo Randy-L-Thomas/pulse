@@ -350,6 +350,9 @@ export function wireModules(toast: ToastFn) {
     }
   }
 
+  document.getElementById("mt-go")!.addEventListener("click", () => {
+    void runTranslate(false);
+  });
   document.getElementById("mt-llm")!.addEventListener("click", () => {
     void runTranslate(true);
   });

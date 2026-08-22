@@ -437,7 +437,7 @@ body.radial-open .clock {
   min-width: 0;
   min-height: 0;
   height: 100%;
-  overflow: hidden;
+  overflow: auto;
   border-left: 1px solid var(--hair);
   background: #101816;
   padding: 6px 8px 8px;
@@ -617,7 +617,15 @@ body.full #modules:not([hidden]) {
   min-width: 0;
 }
 
-#modules textarea, #chat-in { user-select: text; }
+#modules textarea, #chat-in {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  pointer-events: auto;
+  position: relative;
+  z-index: 41;
+}
 
 .mt-cols {
   flex: 1;
@@ -629,8 +637,9 @@ body.full #modules:not([hidden]) {
 
 #modules .mt-cols textarea {
   resize: none;
-  min-height: 0;
+  min-height: 140px;
   height: 100%;
+  align-self: stretch;
   font-size: 17px;
   line-height: 1.45;
   padding: 8px 10px;
@@ -666,6 +675,11 @@ body.full #modules:not([hidden]) {
   pointer-events: auto;
   padding: 0;
   border: 0;
+  margin: 0;
+  min-width: 0;
+  min-height: 0;
+  appearance: none;
+  display: block;
   background: transparent;
   -webkit-app-region: no-drag;
   app-region: no-drag;
