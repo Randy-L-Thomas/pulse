@@ -8,6 +8,12 @@ pub struct WindowInfo {
     pub hwnd: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct OcrOut {
+    pub text: String,
+    pub source: String,
+}
+
 /// True when the bitmap is a failed grab: no contrast (pure black, solid fill).
 /// Dark WhatsApp still has message text, so luma range stays high.
 pub(crate) fn is_blank_bgra(bgra: &[u8]) -> bool {
@@ -42,6 +48,55 @@ pub(crate) fn pick_largest_hwnd(candidates: &[(u64, i64)]) -> Option<u64> {
         .map(|(hwnd, _)| *hwnd)
 }
 
+pub(crate) fn looks_like_whatsapp(title: &str, exe: &str) -> bool {
+    title.to_ascii_lowercase().contains("whatsapp")
+        || exe.to_ascii_lowercase().contains("whatsapp")
+}
+
+/// WhatsApp message pane: drop the left chat list, top chrome, and composer.
+/// `(x, y, width, height)` in the full-window bitmap.
+pub(crate) fn chat_pane_crop(w: u32, h: u32) -> (u32, u32, u32, u32) {
+    if w < 200 || h < 160 {
+        return (0, 0, w, h);
+    }
+    let left = if w >= 900 {
+        (w * 30) / 100
+    } else if w >= 700 {
+        (w * 22) / 100
+    } else {
+        0
+    };
+    let top = ((h * 14) / 100).clamp(40, 96);
+    let bottom = ((h * 12) / 100).clamp(36, 88);
+    let x = left.min(w.saturating_sub(120));
+    let y = top.min(h.saturating_sub(80));
+    let cw = w.saturating_sub(x);
+    let ch = h.saturating_sub(y + bottom).max(80);
+    (x, y, cw, ch)
+}
+
+pub(crate) fn crop_bgra(
+    bgra: &[u8],
+    w: u32,
+    h: u32,
+    x: u32,
+    y: u32,
+    cw: u32,
+    ch: u32,
+) -> (Vec<u8>, u32, u32) {
+    let x = x.min(w.saturating_sub(1));
+    let y = y.min(h.saturating_sub(1));
+    let cw = cw.min(w.saturating_sub(x)).max(1);
+    let ch = ch.min(h.saturating_sub(y)).max(1);
+    let mut out = vec![0u8; cw as usize * ch as usize * 4];
+    for row in 0..ch as usize {
+        let si = ((y as usize + row) * w as usize + x as usize) * 4;
+        let di = row * cw as usize * 4;
+        out[di..di + cw as usize * 4].copy_from_slice(&bgra[si..si + cw as usize * 4]);
+    }
+    (out, cw, ch)
+}
+
 /// Nearest-neighbor shrink so WinRT OCR is not chewing a 4K desktop for 15s.
 pub(crate) fn scale_bgra(bgra: Vec<u8>, w: u32, h: u32, max_w: u32) -> (Vec<u8>, u32, u32) {
     if w == 0 || h == 0 || w <= max_w {
@@ -73,24 +128,29 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
 }
 
 #[cfg(not(windows))]
-pub fn capture_and_ocr(title_substr: &str) -> Result<String, String> {
+pub fn capture_and_ocr(title_substr: &str) -> Result<OcrOut, String> {
     let _ = title_substr;
     Err("OCR is Windows-only".into())
 }
 
+#[cfg(not(windows))]
+pub fn start_focus_watch() {}
+
 #[cfg(windows)]
 mod imp {
     use super::{
-        is_blank_bgra, pick_largest_hwnd, require_ocr_text, scale_bgra, WindowInfo,
+        chat_pane_crop, crop_bgra, is_blank_bgra, looks_like_whatsapp, pick_largest_hwnd,
+        require_ocr_text, scale_bgra, OcrOut, WindowInfo,
     };
     use std::mem::size_of;
+    use std::sync::Mutex;
     use std::time::Duration;
-    use windows::core::{Interface, BOOL};
+    use windows::core::{Interface, BOOL, PWSTR};
     use windows::Globalization::Language;
     use windows::Graphics::Imaging::BitmapDecoder;
     use windows::Media::Ocr::OcrEngine;
     use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream};
-    use windows::Win32::Foundation::{HMODULE, HWND, LPARAM, RECT};
+    use windows::Win32::Foundation::{CloseHandle, HMODULE, HWND, LPARAM, RECT};
     use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
     use windows::Win32::Graphics::Direct3D11::{
         D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
@@ -105,14 +165,28 @@ mod imp {
         DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
     };
     use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClientRect, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
-        IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        EnumWindows, GetAncestor, GetClientRect, GetForegroundWindow, GetWindowRect,
+        GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
+        SetForegroundWindow, ShowWindow, GA_ROOT, SW_RESTORE,
     };
 
     const MIN_CLIENT_W: i32 = 120;
     const MIN_CLIENT_H: i32 = 80;
     const OCR_MAX_W: u32 = 1280;
+
+    #[derive(Clone)]
+    struct FocusHit {
+        hwnd: u64,
+        title: String,
+        exe: String,
+    }
+
+    static LAST_FOCUS: Mutex<Option<FocusHit>> = Mutex::new(None);
 
     struct EnumData {
         out: Vec<WindowInfo>,
@@ -160,11 +234,145 @@ mod imp {
         Ok(data.out)
     }
 
-    pub fn capture_and_ocr(title_substr: &str) -> Result<String, String> {
-        let needle = title_substr.trim();
-        if needle.is_empty() {
-            return Err("no window title".into());
+    pub fn start_focus_watch() {
+        std::thread::Builder::new()
+            .name("pulse-focus".into())
+            .spawn(|| loop {
+                note_foreground();
+                std::thread::sleep(Duration::from_millis(250));
+            })
+            .ok();
+    }
+
+    pub fn capture_and_ocr(title_substr: &str) -> Result<OcrOut, String> {
+        let hwnd = resolve_hwnd(title_substr.trim())?;
+        unsafe {
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+                std::thread::sleep(Duration::from_millis(120));
+            }
         }
+        let title = window_title(hwnd);
+        let exe = exe_path(hwnd);
+        let (mut bgra, mut w, mut h) = grab_bgra(hwnd)?;
+        if looks_like_whatsapp(&title, &exe) {
+            let (x, y, cw, ch) = chat_pane_crop(w, h);
+            let cropped = crop_bgra(&bgra, w, h, x, y, cw, ch);
+            if !is_blank_bgra(&cropped.0) {
+                (bgra, w, h) = cropped;
+            }
+        }
+        let (bgra, w, h) = scale_bgra(bgra, w, h, OCR_MAX_W);
+        let text = require_ocr_text(ocr_bgra(bgra, w, h)?)?;
+        Ok(OcrOut {
+            text,
+            source: title,
+        })
+    }
+
+    fn window_title(hwnd: HWND) -> String {
+        let mut buf = [0u16; 512];
+        let n = unsafe { GetWindowTextW(hwnd, &mut buf) };
+        if n <= 0 {
+            String::new()
+        } else {
+            String::from_utf16_lossy(&buf[..n as usize])
+        }
+    }
+
+    fn exe_path(hwnd: HWND) -> String {
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        if pid == 0 {
+            return String::new();
+        }
+        let proc = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) };
+        let Ok(proc) = proc else {
+            return String::new();
+        };
+        let mut buf = [0u16; 512];
+        let mut len = buf.len() as u32;
+        let ok = unsafe {
+            QueryFullProcessImageNameW(proc, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len)
+        };
+        let _ = unsafe { CloseHandle(proc) };
+        if ok.is_err() {
+            return String::new();
+        }
+        String::from_utf16_lossy(&buf[..len as usize])
+    }
+
+    fn is_pulse_target(title: &str, exe: &str) -> bool {
+        let t = title.to_ascii_lowercase();
+        let e = exe.to_ascii_lowercase();
+        t.contains("pulse") || e.contains("pulse.exe")
+    }
+
+    fn hwnd_alive(hwnd: HWND) -> bool {
+        unsafe {
+            IsWindow(Some(hwnd)).as_bool() && IsWindowVisible(hwnd).as_bool() && !is_cloaked(hwnd)
+        }
+    }
+
+    fn note_foreground() {
+        let raw = unsafe { GetForegroundWindow() };
+        if raw.0.is_null() {
+            return;
+        }
+        let hwnd = unsafe { GetAncestor(raw, GA_ROOT) };
+        let hwnd = if hwnd.0.is_null() { raw } else { hwnd };
+        let title = window_title(hwnd);
+        let exe = exe_path(hwnd);
+        if title.is_empty() || is_pulse_target(&title, &exe) {
+            return;
+        }
+        let (_, _, area) = client_area(hwnd);
+        if area < i64::from(MIN_CLIENT_W) * i64::from(MIN_CLIENT_H) {
+            return;
+        }
+        if let Ok(mut guard) = LAST_FOCUS.lock() {
+            *guard = Some(FocusHit {
+                hwnd: hwnd.0 as usize as u64,
+                title,
+                exe,
+            });
+        }
+    }
+
+    fn last_focus() -> Option<FocusHit> {
+        LAST_FOCUS.lock().ok()?.clone()
+    }
+
+    fn resolve_hwnd(needle: &str) -> Result<HWND, String> {
+        if let Some(hit) = last_focus() {
+            let hwnd = HWND(hit.hwnd as usize as *mut core::ffi::c_void);
+            if hwnd_alive(hwnd) {
+                let n = needle.to_ascii_lowercase();
+                if looks_like_whatsapp(&hit.title, &hit.exe)
+                    || (!n.is_empty() && hit.title.to_ascii_lowercase().contains(&n))
+                {
+                    return Ok(hwnd);
+                }
+            }
+        }
+        if !needle.is_empty() {
+            if let Some(hwnd) = hwnd_matching(needle) {
+                return Ok(hwnd);
+            }
+        }
+        if looks_like_whatsapp(needle, "") {
+            if let Some(hwnd) = hwnd_matching("whatsapp") {
+                return Ok(hwnd);
+            }
+        }
+        Err(if needle.is_empty() {
+            "no focused chat — click the WhatsApp conversation first".into()
+        } else {
+            format!("no window matching '{needle}'")
+        })
+    }
+
+    fn hwnd_matching(needle: &str) -> Option<HWND> {
         let mut data = EnumData {
             out: Vec::new(),
             areas: Vec::new(),
@@ -172,8 +380,7 @@ mod imp {
             cursor_hwnds: Vec::new(),
         };
         unsafe {
-            EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut _ as isize))
-                .map_err(|e| e.to_string())?;
+            EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut _ as isize)).ok()?;
         }
         let ranked: Vec<(u64, i64)> = data
             .out
@@ -181,18 +388,8 @@ mod imp {
             .zip(data.areas.iter())
             .map(|(w, a)| (w.hwnd, *a))
             .collect();
-        let raw = pick_largest_hwnd(&ranked)
-            .ok_or_else(|| format!("no window matching '{needle}'"))?;
-        let hwnd = HWND(raw as usize as *mut core::ffi::c_void);
-        unsafe {
-            if IsIconic(hwnd).as_bool() {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-                std::thread::sleep(Duration::from_millis(120));
-            }
-        }
-        let (bgra, w, h) = grab_bgra(hwnd)?;
-        let (bgra, w, h) = scale_bgra(bgra, w, h, OCR_MAX_W);
-        require_ocr_text(ocr_bgra(bgra, w, h)?)
+        let raw = pick_largest_hwnd(&ranked)?;
+        Some(HWND(raw as usize as *mut core::ffi::c_void))
     }
 
     fn is_cloaked(hwnd: HWND) -> bool {
@@ -240,7 +437,10 @@ mod imp {
         }
         let (cw, ch, area) = client_area(hwnd);
         if let Some(needle) = &data.needle {
-            if lower.contains(needle) && cw >= MIN_CLIENT_W && ch >= MIN_CLIENT_H {
+            let exe = exe_path(hwnd);
+            let hit = lower.contains(needle)
+                || (needle.contains("whatsapp") && looks_like_whatsapp(&title, &exe));
+            if hit && cw >= MIN_CLIENT_W && ch >= MIN_CLIENT_H {
                 data.out.push(WindowInfo {
                     title: title.clone(),
                     hwnd: hwnd.0 as usize as u64,
@@ -486,11 +686,14 @@ mod imp {
 }
 
 #[cfg(windows)]
-pub use imp::{capture_and_ocr, list_windows, pop_cursor};
+pub use imp::{capture_and_ocr, list_windows, pop_cursor, start_focus_watch};
 
 #[cfg(test)]
 mod tests {
-    use super::{is_blank_bgra, pick_largest_hwnd, require_ocr_text, scale_bgra};
+    use super::{
+        chat_pane_crop, crop_bgra, is_blank_bgra, looks_like_whatsapp, pick_largest_hwnd,
+        require_ocr_text, scale_bgra,
+    };
 
     fn solid(w: u32, h: u32, b: u8, g: u8, r: u8) -> Vec<u8> {
         let mut out = Vec::with_capacity((w * h * 4) as usize);
@@ -550,5 +753,31 @@ mod tests {
         assert_eq!((w, h), (4, 2));
         assert_eq!(out.len(), 4 * 2 * 4);
         assert_eq!(&out[0..4], &[10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn whatsapp_from_title_or_exe() {
+        assert!(looks_like_whatsapp("WhatsApp", ""));
+        assert!(looks_like_whatsapp("Mom", r"C:\Program Files\WindowsApps\WhatsApp.exe"));
+        assert!(!looks_like_whatsapp("Cursor", r"C:\Users\x\Cursor.exe"));
+    }
+
+    #[test]
+    fn chat_pane_drops_sidebar_on_wide_window() {
+        let (x, y, cw, ch) = chat_pane_crop(1200, 800);
+        assert!(x >= 300);
+        assert!(y >= 40);
+        assert!(cw + x == 1200);
+        assert!(ch < 800);
+        assert!(ch >= 80);
+    }
+
+    #[test]
+    fn crop_bgra_keeps_requested_block() {
+        let mut src = vec![0u8; 4 * 3 * 4];
+        src[2 * 4 + 0] = 9;
+        let (out, w, h) = crop_bgra(&src, 4, 3, 2, 0, 2, 1);
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(out[0], 9);
     }
 }
