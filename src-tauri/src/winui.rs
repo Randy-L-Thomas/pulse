@@ -166,13 +166,13 @@ mod imp {
     };
     use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
     use windows::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetAncestor, GetClientRect, GetForegroundWindow, GetWindowRect,
         GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-        SetForegroundWindow, ShowWindow, GA_ROOT, SW_RESTORE,
+        SetForegroundWindow, ShowWindow, GA_ROOT, SW_HIDE, SW_RESTORE, SW_SHOWNOACTIVATE,
     };
 
     const MIN_CLIENT_W: i32 = 120;
@@ -254,7 +254,13 @@ mod imp {
         }
         let title = window_title(hwnd);
         let exe = exe_path(hwnd);
-        let (mut bgra, mut w, mut h) = grab_bgra(hwnd)?;
+        // DXGI copies the composed desktop. Pulse is always-on-top, so hide it
+        // or the chat bitmap includes CAM-MCP / TRANSLATE / ui down.
+        let hidden = hide_own_windows();
+        std::thread::sleep(Duration::from_millis(80));
+        let grabbed = grab_bgra(hwnd);
+        restore_windows(&hidden);
+        let (mut bgra, mut w, mut h) = grabbed?;
         if looks_like_whatsapp(&title, &exe) {
             let (x, y, cw, ch) = chat_pane_crop(w, h);
             let cropped = crop_bgra(&bgra, w, h, x, y, cw, ch);
@@ -511,6 +517,49 @@ mod imp {
             }
         }
         Err("no monitor contains that window".into())
+    }
+
+    struct OwnWindows {
+        pid: u32,
+        hwnds: Vec<HWND>,
+    }
+
+    unsafe extern "system" fn own_visible_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let data = &mut *(lparam.0 as *mut OwnWindows);
+        if !IsWindowVisible(hwnd).as_bool() {
+            return BOOL(1);
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == data.pid {
+            data.hwnds.push(hwnd);
+        }
+        BOOL(1)
+    }
+
+    fn hide_own_windows() -> Vec<HWND> {
+        let mut data = OwnWindows {
+            pid: unsafe { GetCurrentProcessId() },
+            hwnds: Vec::new(),
+        };
+        unsafe {
+            let _ = EnumWindows(
+                Some(own_visible_proc),
+                LPARAM(&mut data as *mut _ as isize),
+            );
+            for &hwnd in &data.hwnds {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+        data.hwnds
+    }
+
+    fn restore_windows(hwnds: &[HWND]) {
+        for &hwnd in hwnds {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            }
+        }
     }
 
     fn grab_bgra(hwnd: HWND) -> Result<(Vec<u8>, u32, u32), String> {

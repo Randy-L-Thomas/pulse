@@ -26,6 +26,17 @@ const CHROME_PHRASES: &[&str] = &[
     "tap to",
 ];
 
+const PULSE_PHRASES: &[&str] = &[
+    "ui down",
+    "open chat",
+    "stdio only",
+    "cam-mcp",
+    "ws-ops",
+    "xsiam-ops",
+];
+
+const PULSE_WORDS: &[&str] = &["stdio", "xsiam", "xsiamops", "cammcp", "http", "wsops"];
+
 const SHORT_OK: &[&str] = &[
     "ok", "si", "sí", "no", "hola", "gracias", "jaja", "ja", "yes", "lol", "bye", "okis",
 ];
@@ -35,12 +46,28 @@ pub fn looks_like_wa_ocr(raw: &str) -> bool {
     count_sub(&lower, "yesterday") >= 2
         || count_sub(&lower, "today") >= 2
         || (count_time_tokens(raw) >= 2 && chrome_word_hits(raw) >= 1)
+        || has_pulse_chrome(&lower)
 }
 
 pub fn format_wa_ocr(raw: &str) -> String {
     let stripped = strip_phrases(raw);
     let mut msgs = Vec::new();
+    for para in split_paras(&stripped) {
+        take_messages(para, &mut msgs);
+    }
+    msgs.join("\n\n")
+}
+
+fn split_paras(raw: &str) -> Vec<&str> {
+    raw.split("\n\n")
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+fn take_messages(para: &str, msgs: &mut Vec<String>) {
     let mut cur: Vec<&str> = Vec::new();
+    let mut skip_pulse = false;
     let flush = |cur: &mut Vec<&str>, msgs: &mut Vec<String>| {
         if cur.is_empty() {
             return;
@@ -51,26 +78,32 @@ pub fn format_wa_ocr(raw: &str) -> String {
             msgs.push(keep);
         }
     };
-    for tok in stripped.split_whitespace() {
-        if is_separator(tok) {
-            flush(&mut cur, &mut msgs);
-        } else if is_message_start(tok)
-            && !cur.is_empty()
-            && keep_message(&cur.join(" ")).is_none()
-        {
-            flush(&mut cur, &mut msgs);
-            cur.push(tok);
-        } else {
-            cur.push(tok);
+    for tok in para.split_whitespace() {
+        if is_separator(tok) || is_pulse_token(tok) {
+            flush(&mut cur, msgs);
+            skip_pulse = is_pulse_token(tok);
+            continue;
         }
+        if skip_pulse && !is_message_start(tok) {
+            continue;
+        }
+        skip_pulse = false;
+        if is_message_start(tok) && !cur.is_empty() && should_split_before_greeting(&cur) {
+            flush(&mut cur, msgs);
+        }
+        cur.push(tok);
     }
-    flush(&mut cur, &mut msgs);
-    msgs.join("\n\n")
+    flush(&mut cur, msgs);
+}
+
+fn should_split_before_greeting(cur: &[&str]) -> bool {
+    let so_far = cur.join(" ");
+    keep_message(&so_far).is_none() || cur.len() >= 3
 }
 
 fn strip_phrases(raw: &str) -> String {
     let mut out = raw.to_string();
-    for phrase in CHROME_PHRASES {
+    for phrase in CHROME_PHRASES.iter().chain(PULSE_PHRASES) {
         loop {
             let lower = out.to_ascii_lowercase();
             if let Some(i) = lower.find(phrase) {
@@ -87,12 +120,49 @@ fn is_separator(tok: &str) -> bool {
     is_chrome_word(tok) || is_time_token(tok)
 }
 
+fn has_pulse_chrome(lower: &str) -> bool {
+    PULSE_PHRASES.iter().any(|p| lower.contains(p)) || lower.split_whitespace().any(is_pulse_token)
+}
+
+fn is_pulse_token(tok: &str) -> bool {
+    let t = bare(tok);
+    let t = t.trim_matches(|c: char| c == ':' || c == '.' || c == '@');
+    if PULSE_WORDS.contains(&t) {
+        return true;
+    }
+    if is_pulse_date(t) {
+        return true;
+    }
+    if t == "ms" || t.ends_with("ms") && t.len() > 2 && t[..t.len() - 2].bytes().all(|b| b.is_ascii_digit())
+    {
+        return true;
+    }
+    false
+}
+
+fn is_pulse_date(t: &str) -> bool {
+    let b = t.as_bytes();
+    if b.len() < 6 || b.len() > 7 {
+        return false;
+    }
+    let digits_end = b.iter().take_while(|c| c.is_ascii_digit()).count();
+    if digits_end == 0 || digits_end > 2 {
+        return false;
+    }
+    let letters = b[digits_end..].iter().take_while(|c| c.is_ascii_alphabetic()).count();
+    if letters != 3 {
+        return false;
+    }
+    let rest = &b[digits_end + 3..];
+    rest.len() == 2 && rest.iter().all(|c| c.is_ascii_digit())
+}
+
 fn is_message_start(tok: &str) -> bool {
     let t = bare(tok);
     let t = t.trim_matches(|c: char| c == ':' || c == '.');
     matches!(
         t,
-        "hola" | "buenas" | "buen" | "hello" | "hey" | "hi" | "good" | "gracias"
+        "hola" | "buenas" | "buen" | "hello" | "hey" | "hi" | "good"
     )
 }
 
@@ -208,5 +278,37 @@ mod tests {
     fn keeps_short_chat_acks() {
         assert_eq!(format_wa_ocr("ok 15:25"), "ok");
         assert_eq!(format_wa_ocr("gracias"), "gracias");
+    }
+
+    #[test]
+    fn drops_pulse_strip_leaked_into_whatsapp_ocr() {
+        let raw = "Buenas tardes tiene paquete\n\n\
+hola buenas Tardes y gracias' 22AUG26 CAM-MCP stdio CAM @.3.35 118 ms • ui down • task ? RAM 2 ms ICE 2 ms ui down ws-ops task ? no\n\n\
+TRANSLATE WhatsApp Open chat HTTP — stdio only XSIAM-OPS";
+        assert!(
+            looks_like_wa_ocr(raw),
+            "Translate must re-parse this leftover dump"
+        );
+        assert_eq!(
+            format_wa_ocr(raw),
+            "Buenas tardes tiene paquete\n\nhola buenas Tardes y gracias"
+        );
+    }
+
+    #[test]
+    fn drops_pulse_chrome_sitting_above_the_chat() {
+        let raw = "22AUG26 CAM-MCP stdio TRANSLATE WhatsApp Open chat \
+Buenas tardes tiene paquete hola buenas tardes y gracias";
+        assert_eq!(
+            format_wa_ocr(raw),
+            "Buenas tardes tiene paquete\n\nhola buenas tardes y gracias"
+        );
+    }
+
+    #[test]
+    fn a_normal_translate_request_is_not_wa_ocr() {
+        assert!(!looks_like_wa_ocr(
+            "Can you translate this package note for me tomorrow?"
+        ));
     }
 }
