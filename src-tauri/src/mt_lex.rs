@@ -83,6 +83,8 @@ fn es_en_words() -> &'static [(&'static str, &'static str)] {
         ("ja", "ha"),
         ("paquete", "package"),
         ("paquetes", "packages"),
+        ("gato", "cat"),
+        ("gatos", "cats"),
         ("tiene", "has"),
         ("tengo", "I have"),
         ("tenemos", "we have"),
@@ -188,6 +190,8 @@ fn en_es_words() -> &'static [(&'static str, &'static str)] {
         ("thanks", "gracias"),
         ("package", "paquete"),
         ("packages", "paquetes"),
+        ("cat", "gato"),
+        ("cats", "gatos"),
         ("has", "tiene"),
         ("have", "tiene"),
         ("message", "mensaje"),
@@ -343,6 +347,14 @@ fn translate_body(from: &str, to: &str, body: &str) -> String {
             continue;
         }
         let (core, trail) = peel(toks[i]);
+        if is_article(&core, from) && i + 1 < toks.len() {
+            let (next_core, _) = peel(toks[i + 1]);
+            if lookup(words, &next_core).is_none() && lookup(phrases, &next_core).is_none() {
+                out.push(toks[i].to_string());
+                i += 1;
+                continue;
+            }
+        }
         if let Some(t) = lookup(words, &core) {
             out.push(format!("{t}{trail}"));
         } else {
@@ -352,6 +364,15 @@ fn translate_body(from: &str, to: &str, body: &str) -> String {
     }
     let s = out.join(" ");
     cap_first(&s)
+}
+
+fn is_article(core: &str, from: &str) -> bool {
+    let k = fold_key(core);
+    if from == "es" {
+        matches!(k.as_str(), "el" | "la" | "los" | "las" | "un" | "una")
+    } else {
+        matches!(k.as_str(), "the" | "a" | "an")
+    }
 }
 
 fn is_word_char(c: char) -> bool {
@@ -446,6 +467,18 @@ mod tests {
             translate_lex("en", "es", "Good afternoon"),
             "Buenas tardes"
         );
+    }
+
+    #[test]
+    fn el_gato_is_the_cat_not_the_gato() {
+        assert_eq!(translate_lex("es", "en", "El Gato"), "The cat");
+        assert_eq!(translate_lex("es", "en", "el gato"), "The cat");
+        assert_eq!(translate_lex("en", "es", "The Cat"), "El gato");
+    }
+
+    #[test]
+    fn article_stays_if_noun_is_unknown() {
+        assert_eq!(translate_lex("es", "en", "El Quetzalito"), "El Quetzalito");
     }
 
     #[test]
