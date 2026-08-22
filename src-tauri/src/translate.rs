@@ -31,7 +31,7 @@ fn save_cache(cache: &Cache) {
 
 fn key(from: &str, to: &str, text: &str) -> String {
     let mut h = Sha256::new();
-    h.update(b"es-MX|en-US|v2|");
+    h.update(b"es-MX|en-US|v3|");
     h.update(from.as_bytes());
     h.update(b"|");
     h.update(to.as_bytes());
@@ -56,7 +56,7 @@ pub async fn translate(
     source: &str,
     enrich: bool,
 ) -> Result<TranslateOut, String> {
-    let src = source.trim();
+    let src = prepare_source(source);
     if src.is_empty() {
         return Ok(TranslateOut {
             text: String::new(),
@@ -66,20 +66,20 @@ pub async fn translate(
         });
     }
     let from = if from == "auto" {
-        detect_lang(src)
+        detect_lang(&src)
     } else {
         normalize_lang(from)
     };
     let to = normalize_lang(to);
     if from == to {
         return Ok(TranslateOut {
-            text: src.to_string(),
+            text: src,
             cached: true,
             engine: "same".into(),
             model: None,
         });
     }
-    let k = key(from, to, src);
+    let k = key(from, to, &src);
     let mut cache = load_cache();
     if !enrich {
         if let Some(hit) = cache.entries.get(&k) {
@@ -91,15 +91,15 @@ pub async fn translate(
             });
         }
     }
-    let (mut out, model) = mt_ollama(client, ollama_url, from, to, src).await?;
+    let (mut out, model) = mt_ollama(client, ollama_url, from, to, &src).await?;
     if enrich {
-        if let Ok(polished) = enrich_ollama(client, ollama_url, from, to, src, &out).await {
-            if is_usable_translation(&polished, src) {
+        if let Ok(polished) = enrich_ollama(client, ollama_url, from, to, &src, &out).await {
+            if is_usable_translation(&polished, &src) {
                 out = polished;
             }
         }
     }
-    if is_usable_translation(&out, src) {
+    if is_usable_translation(&out, &src) {
         cache.entries.insert(k, out.clone());
         save_cache(&cache);
     }
@@ -178,6 +178,17 @@ fn normalize_lang(code: &str) -> &'static str {
     }
 }
 
+fn prepare_source(source: &str) -> String {
+    let src = source.trim();
+    if crate::ocr_text::looks_like_wa_ocr(src) {
+        let formatted = crate::ocr_text::format_wa_ocr(src);
+        if !formatted.is_empty() {
+            return formatted;
+        }
+    }
+    src.to_string()
+}
+
 fn lang_name(code: &str) -> &'static str {
     match normalize_lang(code) {
         "es" => "Mexican Spanish",
@@ -195,6 +206,8 @@ Mexico vocabulary (computadora, celular, carro, platicar, departamento). \
 Never Spain-only forms (vosotros, coche, ordenador, móvil, piso).\n\
 American English: US spelling and vocabulary (color, truck, apartment, cell phone, elevator, soccer). \
 Never British-only forms (colour, lorry, flat, mobile, lift, football).\n\
+If the source has multiple chat lines, translate each non-empty line onto its own line. \
+Keep a blank line between messages. Do not merge them into one paragraph or invent extra sentences.\n\
 Output ONLY the translation. No quotes, labels, notes, or extra lines.\n\n{}",
         lang_name(from),
         lang_name(to),
@@ -426,12 +439,14 @@ fn clean_translation(raw: &str, src: &str) -> String {
         .lines()
         .map(str::trim)
         .filter(|line| {
-            !line.is_empty()
-                && !line.starts_with("Translate from")
-                && !line.starts_with("Output ONLY")
+            line.is_empty()
+                || (!line.starts_with("Translate from") && !line.starts_with("Output ONLY"))
         })
         .collect::<Vec<_>>()
         .join("\n");
+    while t.contains("\n\n\n") {
+        t = t.replace("\n\n\n", "\n\n");
+    }
     if t.eq_ignore_ascii_case(src) {
         String::new()
     } else {
@@ -534,6 +549,7 @@ mod tests {
         assert!(p.contains("vosotros"));
         assert!(p.contains("lorry"));
         assert!(p.contains("Hola"));
+        assert!(p.contains("each non-empty line"));
     }
 
     #[test]
@@ -560,6 +576,12 @@ mod tests {
     fn strips_think_tags_and_labels() {
         let raw = "<think>plan</think>\nTranslation: Hello\n";
         assert_eq!(clean_translation(raw, "Hola"), "Hello");
+    }
+
+    #[test]
+    fn keeps_blank_line_between_chat_messages() {
+        let raw = "Good afternoon, you have a package.\n\nHello, good afternoon and thanks!";
+        assert_eq!(clean_translation(raw, "x"), raw);
     }
 
     #[test]
