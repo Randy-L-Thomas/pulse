@@ -152,9 +152,20 @@ fn detect_mt_lang(text: String) -> Option<String> {
 }
 
 #[tauri::command]
-fn capture_ocr(state: tauri::State<'_, Arc<AppState>>) -> Result<String, String> {
-    let title = state.ui.lock().unwrap().wa_title.clone();
-    winui::capture_and_ocr(&title)
+async fn capture_ocr(
+    state: tauri::State<'_, Arc<AppState>>,
+    title: Option<String>,
+) -> Result<String, String> {
+    let saved = state.ui.lock().unwrap().wa_title.clone();
+    let title = title.unwrap_or_default();
+    let title = if title.trim().is_empty() {
+        saved
+    } else {
+        title
+    };
+    tokio::task::spawn_blocking(move || winui::capture_and_ocr(&title))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

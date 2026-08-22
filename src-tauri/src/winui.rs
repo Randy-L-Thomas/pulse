@@ -8,6 +8,60 @@ pub struct WindowInfo {
     pub hwnd: u64,
 }
 
+/// True when the bitmap is a failed grab: no contrast (pure black, solid fill).
+/// Dark WhatsApp still has message text, so luma range stays high.
+pub(crate) fn is_blank_bgra(bgra: &[u8]) -> bool {
+    if bgra.len() < 16 {
+        return true;
+    }
+    let mut min = 255u32;
+    let mut max = 0u32;
+    let mut n = 0u32;
+    for px in bgra.chunks_exact(4).step_by(8) {
+        let y = (u32::from(px[0]) + u32::from(px[1]) + u32::from(px[2])) / 3;
+        min = min.min(y);
+        max = max.max(y);
+        n += 1;
+    }
+    n == 0 || max.saturating_sub(min) < 10
+}
+
+pub(crate) fn require_ocr_text(text: String) -> Result<String, String> {
+    if text.trim().is_empty() {
+        Err("OCR found no text — is the chat visible?".into())
+    } else {
+        Ok(text)
+    }
+}
+
+pub(crate) fn pick_largest_hwnd(candidates: &[(u64, i64)]) -> Option<u64> {
+    candidates
+        .iter()
+        .filter(|(_, area)| *area > 0)
+        .max_by_key(|(_, area)| *area)
+        .map(|(hwnd, _)| *hwnd)
+}
+
+/// Nearest-neighbor shrink so WinRT OCR is not chewing a 4K desktop for 15s.
+pub(crate) fn scale_bgra(bgra: Vec<u8>, w: u32, h: u32, max_w: u32) -> (Vec<u8>, u32, u32) {
+    if w == 0 || h == 0 || w <= max_w {
+        return (bgra, w, h);
+    }
+    let nw = max_w;
+    let nh = ((u64::from(h) * u64::from(nw)) / u64::from(w)).max(1) as u32;
+    let mut out = vec![0u8; nw as usize * nh as usize * 4];
+    for y in 0..nh as usize {
+        let sy = y * h as usize / nh as usize;
+        for x in 0..nw as usize {
+            let sx = x * w as usize / nw as usize;
+            let si = (sy * w as usize + sx) * 4;
+            let di = (y * nw as usize + x) * 4;
+            out[di..di + 4].copy_from_slice(&bgra[si..si + 4]);
+        }
+    }
+    (out, nw, nh)
+}
+
 #[cfg(not(windows))]
 pub fn pop_cursor() -> Result<String, String> {
     Err("pop is Windows-only".into())
@@ -26,25 +80,43 @@ pub fn capture_and_ocr(title_substr: &str) -> Result<String, String> {
 
 #[cfg(windows)]
 mod imp {
-    use super::WindowInfo;
+    use super::{
+        is_blank_bgra, pick_largest_hwnd, require_ocr_text, scale_bgra, WindowInfo,
+    };
     use std::mem::size_of;
-    use windows::core::BOOL;
+    use std::time::Duration;
+    use windows::core::{Interface, BOOL};
+    use windows::Globalization::Language;
     use windows::Graphics::Imaging::BitmapDecoder;
     use windows::Media::Ocr::OcrEngine;
     use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream};
-    use windows::Win32::Foundation::{HWND, LPARAM, RECT};
-    use windows::Win32::Graphics::Gdi::{
-        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
-        GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HGDIOBJ,
-        SRCCOPY, BI_RGB,
+    use windows::Win32::Foundation::{HMODULE, HWND, LPARAM, RECT};
+    use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
+    use windows::Win32::Graphics::Direct3D11::{
+        D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+        D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE,
+        D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
     };
+    use windows::Win32::Graphics::Dwm::{
+        DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
+    };
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory1, IDXGIOutput1, IDXGIResource,
+        DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
+    };
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClientRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-        IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        EnumWindows, GetClientRect, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+        IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE,
     };
+
+    const MIN_CLIENT_W: i32 = 120;
+    const MIN_CLIENT_H: i32 = 80;
+    const OCR_MAX_W: u32 = 1280;
 
     struct EnumData {
         out: Vec<WindowInfo>,
+        areas: Vec<i64>,
         needle: Option<String>,
         cursor_hwnds: Vec<HWND>,
     }
@@ -52,6 +124,7 @@ mod imp {
     pub fn pop_cursor() -> Result<String, String> {
         let mut data = EnumData {
             out: Vec::new(),
+            areas: Vec::new(),
             needle: None,
             cursor_hwnds: Vec::new(),
         };
@@ -76,6 +149,7 @@ mod imp {
     pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
         let mut data = EnumData {
             out: Vec::new(),
+            areas: Vec::new(),
             needle: None,
             cursor_hwnds: Vec::new(),
         };
@@ -93,6 +167,7 @@ mod imp {
         }
         let mut data = EnumData {
             out: Vec::new(),
+            areas: Vec::new(),
             needle: Some(needle.to_ascii_lowercase()),
             cursor_hwnds: Vec::new(),
         };
@@ -100,18 +175,52 @@ mod imp {
             EnumWindows(Some(enum_proc), LPARAM(&mut data as *mut _ as isize))
                 .map_err(|e| e.to_string())?;
         }
-        let hwnd = data
+        let ranked: Vec<(u64, i64)> = data
             .out
-            .first()
-            .map(|w| HWND(w.hwnd as usize as *mut core::ffi::c_void))
+            .iter()
+            .zip(data.areas.iter())
+            .map(|(w, a)| (w.hwnd, *a))
+            .collect();
+        let raw = pick_largest_hwnd(&ranked)
             .ok_or_else(|| format!("no window matching '{needle}'"))?;
-        let bgra = unsafe { grab_bgra(hwnd) }?;
-        ocr_bgra(bgra.0, bgra.1, bgra.2)
+        let hwnd = HWND(raw as usize as *mut core::ffi::c_void);
+        unsafe {
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+                std::thread::sleep(Duration::from_millis(120));
+            }
+        }
+        let (bgra, w, h) = grab_bgra(hwnd)?;
+        let (bgra, w, h) = scale_bgra(bgra, w, h, OCR_MAX_W);
+        require_ocr_text(ocr_bgra(bgra, w, h)?)
+    }
+
+    fn is_cloaked(hwnd: HWND) -> bool {
+        let mut cloaked = 0u32;
+        let ok = unsafe {
+            DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED,
+                &mut cloaked as *mut u32 as *mut core::ffi::c_void,
+                size_of::<u32>() as u32,
+            )
+        };
+        ok.is_ok() && cloaked != 0
+    }
+
+    fn client_area(hwnd: HWND) -> (i32, i32, i64) {
+        let mut rc = RECT::default();
+        if unsafe { GetClientRect(hwnd, &mut rc) }.is_err() {
+            return (0, 0, 0);
+        }
+        let w = (rc.right - rc.left).max(0);
+        let h = (rc.bottom - rc.top).max(0);
+        (w, h, i64::from(w) * i64::from(h))
     }
 
     unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let data = &mut *(lparam.0 as *mut EnumData);
-        if !IsWindowVisible(hwnd).as_bool() {
+        if !IsWindowVisible(hwnd).as_bool() || is_cloaked(hwnd) {
             return BOOL(1);
         }
         let mut buf = [0u16; 512];
@@ -129,66 +238,198 @@ mod imp {
         if lower.contains("cursor") && !lower.contains("pulse") {
             data.cursor_hwnds.push(hwnd);
         }
+        let (cw, ch, area) = client_area(hwnd);
         if let Some(needle) = &data.needle {
-            if lower.contains(needle) {
+            if lower.contains(needle) && cw >= MIN_CLIENT_W && ch >= MIN_CLIENT_H {
                 data.out.push(WindowInfo {
                     title: title.clone(),
                     hwnd: hwnd.0 as usize as u64,
                 });
+                data.areas.push(area);
             }
-        } else if title.len() > 1 {
-            let mut rc = RECT::default();
-            let _ = GetClientRect(hwnd, &mut rc);
-            if rc.right - rc.left >= 120 && rc.bottom - rc.top >= 80 {
-                data.out.push(WindowInfo {
-                    title,
-                    hwnd: hwnd.0 as usize as u64,
-                });
-            }
+        } else if title.len() > 1 && cw >= MIN_CLIENT_W && ch >= MIN_CLIENT_H {
+            data.out.push(WindowInfo {
+                title,
+                hwnd: hwnd.0 as usize as u64,
+            });
         }
         BOOL(1)
     }
 
-    unsafe fn grab_bgra(hwnd: HWND) -> Result<(Vec<u8>, u32, u32), String> {
+    fn window_bounds(hwnd: HWND) -> Result<RECT, String> {
         let mut rc = RECT::default();
-        GetClientRect(hwnd, &mut rc).map_err(|e| e.to_string())?;
-        let w = (rc.right - rc.left).max(1) as i32;
-        let h = (rc.bottom - rc.top).max(1) as i32;
-        let hdc = GetDC(Some(hwnd));
-        if hdc.0.is_null() {
-            return Err("GetDC failed".into());
-        }
-        let mem = CreateCompatibleDC(Some(hdc));
-        let bmp = CreateCompatibleBitmap(hdc, w, h);
-        let old = SelectObject(mem, HGDIOBJ(bmp.0));
-        let _ = BitBlt(mem, 0, 0, w, h, Some(hdc), 0, 0, SRCCOPY);
-        let mut info = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: w,
-                biHeight: -h,
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0 as u32,
-                ..Default::default()
-            },
-            ..Default::default()
+        let ok = unsafe {
+            DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                &mut rc as *mut RECT as *mut core::ffi::c_void,
+                size_of::<RECT>() as u32,
+            )
         };
-        let mut pixels = vec![0u8; (w * h * 4) as usize];
-        GetDIBits(
-            mem,
-            bmp,
-            0,
-            h as u32,
-            Some(pixels.as_mut_ptr() as *mut _),
-            &mut info,
-            DIB_RGB_COLORS,
-        );
-        SelectObject(mem, old);
-        let _ = DeleteObject(HGDIOBJ(bmp.0));
-        let _ = DeleteDC(mem);
-        ReleaseDC(Some(hwnd), hdc);
-        Ok((pixels, w as u32, h as u32))
+        if ok.is_ok() && rc.right > rc.left && rc.bottom > rc.top {
+            return Ok(rc);
+        }
+        unsafe { GetWindowRect(hwnd, &mut rc) }.map_err(|e| e.to_string())?;
+        Ok(rc)
+    }
+
+    fn rect_contains(outer: RECT, x: i32, y: i32) -> bool {
+        x >= outer.left && x < outer.right && y >= outer.top && y < outer.bottom
+    }
+
+    fn find_output(window: RECT) -> Result<(IDXGIAdapter, IDXGIOutput1, RECT), String> {
+        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(|e| e.to_string())?;
+        let cx = window.left + (window.right - window.left) / 2;
+        let cy = window.top + (window.bottom - window.top) / 2;
+        let mut i = 0;
+        loop {
+            let adapter = match unsafe { factory.EnumAdapters(i) } {
+                Ok(a) => a,
+                Err(_) => break,
+            };
+            i += 1;
+            let mut j = 0;
+            loop {
+                let output = match unsafe { adapter.EnumOutputs(j) } {
+                    Ok(o) => o,
+                    Err(_) => break,
+                };
+                j += 1;
+                let desc = match unsafe { output.GetDesc() } {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                if !desc.AttachedToDesktop.as_bool() {
+                    continue;
+                }
+                if rect_contains(desc.DesktopCoordinates, cx, cy) {
+                    let output1: IDXGIOutput1 = output.cast().map_err(|e| e.to_string())?;
+                    return Ok((adapter, output1, desc.DesktopCoordinates));
+                }
+            }
+        }
+        Err("no monitor contains that window".into())
+    }
+
+    fn grab_bgra(hwnd: HWND) -> Result<(Vec<u8>, u32, u32), String> {
+        let win = window_bounds(hwnd)?;
+        let w = win.right - win.left;
+        let h = win.bottom - win.top;
+        if w < MIN_CLIENT_W || h < MIN_CLIENT_H {
+            return Err("window too small to capture".into());
+        }
+        let (adapter, output, desktop) = find_output(win)?;
+        let mut device = None;
+        unsafe {
+            D3D11CreateDevice(
+                &adapter,
+                D3D_DRIVER_TYPE_UNKNOWN,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                None,
+            )
+        }
+        .map_err(|e| e.to_string())?;
+        let device = device.ok_or("D3D11CreateDevice returned no device")?;
+        let context = unsafe { device.GetImmediateContext() }.map_err(|e| e.to_string())?;
+        let dup = unsafe { output.DuplicateOutput(&device) }
+            .map_err(|e| format!("screen capture blocked ({e})"))?;
+
+        let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
+        let mut resource: Option<IDXGIResource> = None;
+        let mut last = "screen capture timed out".to_string();
+        for _ in 0..8 {
+            match unsafe { dup.AcquireNextFrame(200, &mut info, &mut resource) } {
+                Ok(()) => {
+                    let tex: ID3D11Texture2D = match resource.take() {
+                        Some(r) => r.cast().map_err(|e| e.to_string())?,
+                        None => {
+                            let _ = unsafe { dup.ReleaseFrame() };
+                            last = "screen capture returned no frame".into();
+                            continue;
+                        }
+                    };
+                    let copied = copy_crop(&device, &context, &tex, win, desktop);
+                    let _ = unsafe { dup.ReleaseFrame() };
+                    match copied {
+                        Ok(img) if !is_blank_bgra(&img.0) => return Ok(img),
+                        Ok(_) => last = "capture was blank — is WhatsApp uncovered?".into(),
+                        Err(e) => last = e,
+                    }
+                }
+                Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => continue,
+                Err(e) => return Err(format!("screen capture failed ({e})")),
+            }
+        }
+        Err(last)
+    }
+
+    fn copy_crop(
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+        src: &ID3D11Texture2D,
+        win: RECT,
+        desktop: RECT,
+    ) -> Result<(Vec<u8>, u32, u32), String> {
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { src.GetDesc(&mut desc) };
+        // 87 = B8G8R8A8_UNORM, 91 = B8G8R8A8_UNORM_SRGB
+        if desc.Format.0 != DXGI_FORMAT_B8G8R8A8_UNORM.0 && desc.Format.0 != 91 {
+            return Err(format!("unexpected desktop pixel format {}", desc.Format.0));
+        }
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.BindFlags = 0;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+        desc.MiscFlags = 0;
+        let mut staging = None;
+        unsafe { device.CreateTexture2D(&desc, None, Some(&mut staging)) }
+            .map_err(|e| e.to_string())?;
+        let staging = staging.ok_or("staging texture missing")?;
+        unsafe { context.CopyResource(&staging, src) };
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            context
+                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .map_err(|e| e.to_string())?;
+        }
+        let tex_w = desc.Width as i32;
+        let tex_h = desc.Height as i32;
+        let x0 = (win.left - desktop.left).clamp(0, tex_w.saturating_sub(1));
+        let y0 = (win.top - desktop.top).clamp(0, tex_h.saturating_sub(1));
+        let x1 = (win.right - desktop.left).clamp(x0 + 1, tex_w);
+        let y1 = (win.bottom - desktop.top).clamp(y0 + 1, tex_h);
+        let w = (x1 - x0) as u32;
+        let h = (y1 - y0) as u32;
+        let pitch = mapped.RowPitch as usize;
+        let src_ptr = mapped.pData as *const u8;
+        let mut out = vec![0u8; w as usize * h as usize * 4];
+        for y in 0..h as usize {
+            let src_row = unsafe { src_ptr.add((y0 as usize + y) * pitch + x0 as usize * 4) };
+            let dst = &mut out[y * w as usize * 4..][..w as usize * 4];
+            unsafe {
+                std::ptr::copy_nonoverlapping(src_row, dst.as_mut_ptr(), w as usize * 4);
+            }
+            for px in dst.chunks_exact_mut(4) {
+                px[3] = 255;
+            }
+        }
+        unsafe { context.Unmap(&staging, 0) };
+        Ok((out, w, h))
+    }
+
+    fn ocr_engine() -> Result<OcrEngine, String> {
+        for tag in ["es", "en"] {
+            if let Ok(lang) = Language::CreateLanguage(&tag.into()) {
+                if let Ok(engine) = OcrEngine::TryCreateFromLanguage(&lang) {
+                    return Ok(engine);
+                }
+            }
+        }
+        OcrEngine::TryCreateFromUserProfileLanguages().map_err(|e| e.to_string())
     }
 
     fn ocr_bgra(bgra: Vec<u8>, w: u32, h: u32) -> Result<String, String> {
@@ -212,7 +453,7 @@ mod imp {
             .map_err(|e| e.to_string())?
             .get()
             .map_err(|e| e.to_string())?;
-        let engine = OcrEngine::TryCreateFromUserProfileLanguages().map_err(|e| e.to_string())?;
+        let engine = ocr_engine()?;
         let result = engine
             .RecognizeAsync(&software)
             .map_err(|e| e.to_string())?
@@ -246,3 +487,68 @@ mod imp {
 
 #[cfg(windows)]
 pub use imp::{capture_and_ocr, list_windows, pop_cursor};
+
+#[cfg(test)]
+mod tests {
+    use super::{is_blank_bgra, pick_largest_hwnd, require_ocr_text, scale_bgra};
+
+    fn solid(w: u32, h: u32, b: u8, g: u8, r: u8) -> Vec<u8> {
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for _ in 0..(w * h) {
+            out.extend_from_slice(&[b, g, r, 255]);
+        }
+        out
+    }
+
+    fn two_tone(w: u32, h: u32) -> Vec<u8> {
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                if x < w / 2 {
+                    out.extend_from_slice(&[15, 20, 26, 255]);
+                } else if y % 3 == 0 {
+                    out.extend_from_slice(&[230, 235, 240, 255]);
+                } else {
+                    out.extend_from_slice(&[15, 20, 26, 255]);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn blank_when_all_black_or_solid() {
+        assert!(is_blank_bgra(&[]));
+        assert!(is_blank_bgra(&solid(64, 64, 0, 0, 0)));
+        assert!(is_blank_bgra(&solid(64, 64, 18, 18, 18)));
+    }
+
+    #[test]
+    fn not_blank_when_dark_theme_has_text_contrast() {
+        assert!(!is_blank_bgra(&two_tone(64, 64)));
+    }
+
+    #[test]
+    fn empty_ocr_is_an_error() {
+        assert!(require_ocr_text(String::new()).is_err());
+        assert!(require_ocr_text("   \n".into()).is_err());
+        assert_eq!(require_ocr_text("Hola".into()).unwrap(), "Hola");
+    }
+
+    #[test]
+    fn picks_largest_visible_match() {
+        assert_eq!(pick_largest_hwnd(&[]), None);
+        assert_eq!(
+            pick_largest_hwnd(&[(1, 0), (2, 800 * 600), (3, 200 * 100)]),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn scales_wide_bitmap_down() {
+        let (out, w, h) = scale_bgra(solid(8, 4, 10, 20, 30), 8, 4, 4);
+        assert_eq!((w, h), (4, 2));
+        assert_eq!(out.len(), 4 * 2 * 4);
+        assert_eq!(&out[0..4], &[10, 20, 30, 255]);
+    }
+}
