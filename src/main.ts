@@ -495,7 +495,16 @@ window.addEventListener("resize", () => {
 });
 
 listen<Snapshot>("snapshot", (ev) => applySnapshot(ev.payload));
-listen<string>("width-mode", (ev) => setFullLayout(ev.payload === "full"));
+listen<string>("width-mode", (ev) => setFullLayout(ev.payload !== "half"));
+
+document.querySelectorAll<HTMLButtonElement>("#grips [data-resize]").forEach((grip) => {
+  grip.addEventListener("mousedown", (ev) => {
+    ev.preventDefault();
+    const dir = grip.dataset.resize;
+    if (!dir) return;
+    void win.startResizeDragging(dir as Parameters<typeof win.startResizeDragging>[0]);
+  });
+});
 invoke<Snapshot>("get_snapshot")
   .then(applySnapshot)
   .catch((err) => toast(String(err)));

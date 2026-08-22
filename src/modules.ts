@@ -49,6 +49,7 @@ export function wireModules(toast: ToastFn) {
 
   function formatMtDone(out: TranslateOut): string {
     if (out.engine === "same") return "same";
+    if (out.engine === "lex") return "lex";
     const model = out.model?.trim();
     if (out.cached) return model ? `cache · ${model}` : "cache";
     return model ? `${out.engine} · ${model}` : out.engine;
@@ -197,7 +198,7 @@ export function wireModules(toast: ToastFn) {
     }
   }
 
-  async function runTranslate() {
+  async function runTranslate(llm = false) {
     if (mtInFlight) {
       mtQueued = true;
       return;
@@ -228,7 +229,7 @@ export function wireModules(toast: ToastFn) {
             source,
             from,
             to,
-            enrich: false,
+            llm,
           });
           if (epoch !== mtEpoch) break;
           if (mtQueued) continue;
@@ -241,7 +242,10 @@ export function wireModules(toast: ToastFn) {
           }
           mtDst.value = out.text;
           syncMtScroll(mtSrc, mtDst);
-          setMtStatus(swappedTo ? `swapped to ${swappedTo}` : formatMtDone(out), "ok");
+          setMtStatus(
+            swappedTo ? `swapped to ${swappedTo}` : llm ? `llm · ${formatMtDone(out)}` : formatMtDone(out),
+            "ok",
+          );
         } catch (e) {
           if (epoch !== mtEpoch) break;
           if (mtQueued) continue;
@@ -336,6 +340,10 @@ export function wireModules(toast: ToastFn) {
       followBusy = false;
     }
   }
+
+  document.getElementById("mt-llm")!.addEventListener("click", () => {
+    void runTranslate(true);
+  });
 
   mtFollow.addEventListener("click", () => {
     if (followOn) {
@@ -453,6 +461,7 @@ export function wireModules(toast: ToastFn) {
         mtTo.value = "en";
       }
       showMod(s.last_module);
+      setFullLayout((s.win_mode || "half") !== "half");
       await loadWindows();
       await loadModels();
     })

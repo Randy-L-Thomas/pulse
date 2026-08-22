@@ -54,7 +54,7 @@ pub async fn translate(
     from: &str,
     to: &str,
     source: &str,
-    enrich: bool,
+    llm: bool,
 ) -> Result<TranslateOut, String> {
     let src = prepare_source(source);
     if src.is_empty() {
@@ -79,26 +79,26 @@ pub async fn translate(
             model: None,
         });
     }
+    if !llm {
+        let out = crate::mt_lex::translate_lex(from, to, &src);
+        return Ok(TranslateOut {
+            text: out,
+            cached: false,
+            engine: "lex".into(),
+            model: None,
+        });
+    }
     let k = key(from, to, &src);
     let mut cache = load_cache();
-    if !enrich {
-        if let Some(hit) = cache.entries.get(&k) {
-            return Ok(TranslateOut {
-                text: hit.clone(),
-                cached: true,
-                engine: "cache".into(),
-                model: cached_mt_model(),
-            });
-        }
+    if let Some(hit) = cache.entries.get(&k) {
+        return Ok(TranslateOut {
+            text: hit.clone(),
+            cached: true,
+            engine: "cache".into(),
+            model: cached_mt_model(),
+        });
     }
-    let (mut out, model) = mt_ollama(client, ollama_url, from, to, &src).await?;
-    if enrich {
-        if let Ok(polished) = enrich_ollama(client, ollama_url, from, to, &src, &out).await {
-            if is_usable_translation(&polished, &src) {
-                out = polished;
-            }
-        }
-    }
+    let (out, model) = mt_ollama(client, ollama_url, from, to, &src).await?;
     if is_usable_translation(&out, &src) {
         cache.entries.insert(k, out.clone());
         save_cache(&cache);
@@ -256,6 +256,7 @@ async fn mt_ollama(
     Err(format!("model {model} repeated the source"))
 }
 
+#[allow(dead_code)]
 async fn enrich_ollama(
     client: &reqwest::Client,
     base: &str,
@@ -633,6 +634,17 @@ TRANSLATE WhatsApp Open chat HTTP — stdio only XSIAM-OPS";
             super::map_ollama_err("connection refused", "http://192.168.1.5:1234"),
             "Ollama not running on 192.168.1.5:1234"
         );
+    }
+
+    #[tokio::test]
+    async fn lex_default_does_not_need_ollama() {
+        let client = reqwest::Client::new();
+        let out = super::translate(&client, "http://127.0.0.1:9", "es", "en", "hola", false)
+            .await
+            .unwrap();
+        assert_eq!(out.engine, "lex");
+        assert_eq!(out.text, "Hello");
+        assert_eq!(out.model, None);
     }
 
     #[tokio::test]

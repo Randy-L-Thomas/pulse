@@ -22,6 +22,16 @@ pub struct UiState {
     pub font_px: u32,
     #[serde(default)]
     pub cell_order: Vec<String>,
+    #[serde(default = "default_win_mode")]
+    pub win_mode: String,
+    #[serde(default)]
+    pub win_x: i32,
+    #[serde(default)]
+    pub win_y: i32,
+    #[serde(default)]
+    pub win_w: u32,
+    #[serde(default)]
+    pub win_h: u32,
 }
 
 fn default_module() -> String {
@@ -42,6 +52,12 @@ fn default_ollama() -> String {
 fn default_font_px() -> u32 {
     13
 }
+fn default_win_mode() -> String {
+    "half".into()
+}
+
+pub const WIN_MIN_W: u32 = 480;
+pub const WIN_MIN_H: u32 = 200;
 
 pub const FONT_PX_MIN: u32 = 11;
 pub const FONT_PX_MAX: u32 = 22;
@@ -62,6 +78,11 @@ impl Default for UiState {
             ollama_url: default_ollama(),
             font_px: default_font_px(),
             cell_order: Vec::new(),
+            win_mode: default_win_mode(),
+            win_x: 0,
+            win_y: 0,
+            win_w: 0,
+            win_h: 0,
         }
     }
 }
