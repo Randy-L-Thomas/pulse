@@ -531,6 +531,10 @@ mod tests {
         assert_eq!(detect_lang_confident("ok"), None);
         assert_eq!(detect_lang_confident("Hello there"), None);
         assert_eq!(detect_lang_confident("xyz abc def ghi jkl"), None);
+        assert_eq!(
+            detect_lang_confident("Them: Buenas tardes tiene paquete\n\nMe: hola gracias"),
+            Some("es")
+        );
         assert_eq!(detect_lang("Hello"), "es");
         assert_eq!(detect_lang("ok"), "es");
     }

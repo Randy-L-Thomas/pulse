@@ -214,14 +214,16 @@ export function wireModules(toast: ToastFn) {
           setMtStatus("", "");
           break;
         }
-        const swappedTo = await maybeSwapWrongPaste(source);
+        const swappedTo = mtFromPaste ? await maybeSwapWrongPaste(source) : "";
+        mtFromPaste = false;
         if (epoch !== mtEpoch) break;
-        const from = pickLang(mtFrom.value, "es");
-        const to = pickLang(mtTo.value, "en");
+        let from = pickLang(mtFrom.value, "es");
+        let to = pickLang(mtTo.value, "en");
         if (from === to) {
-          mtDst.value = source.trim();
-          setMtStatus("same", "ok");
-          continue;
+          from = "es";
+          to = "en";
+          mtFrom.value = "es";
+          mtTo.value = "en";
         }
         setMtStatus("Translating", "busy");
         try {
@@ -330,7 +332,14 @@ export function wireModules(toast: ToastFn) {
         title: ocrWin.value,
       });
       const text = out.text.trim();
-      if (!text || text === followLast) return;
+      if (!text) {
+        setMtStatus("follow · no text", "err");
+        return;
+      }
+      if (text === followLast) {
+        setMtStatus("follow", "busy");
+        return;
+      }
       followLast = text;
       mtSrc.value = text;
       void runTranslate();
@@ -370,7 +379,6 @@ export function wireModules(toast: ToastFn) {
   });
   mtSrc.addEventListener("input", () => {
     if (mtFromPaste) {
-      mtFromPaste = false;
       void runTranslate();
       return;
     }
