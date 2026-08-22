@@ -280,11 +280,29 @@ fn split_speaker(line: &str) -> (Option<String>, &str) {
     (Some(who.to_string()), rest.trim())
 }
 
+fn fold_key(s: &str) -> String {
+    let mut out = String::new();
+    let mut space = false;
+    for c in fold(s).chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            space = false;
+        } else if !space && !out.is_empty() {
+            out.push(' ');
+            space = true;
+        }
+    }
+    out.trim().to_string()
+}
+
 fn lookup<'a>(table: &'a [(&'a str, &'a str)], key: &str) -> Option<&'a str> {
-    let k = fold(key);
+    let k = fold_key(key);
+    if k.is_empty() {
+        return None;
+    }
     table
         .iter()
-        .find(|(src, _)| fold(src) == k)
+        .find(|(src, _)| fold_key(src) == k)
         .map(|(_, dst)| *dst)
 }
 
@@ -336,16 +354,26 @@ fn translate_body(from: &str, to: &str, body: &str) -> String {
     cap_first(&s)
 }
 
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, 'á' | 'é' | 'í' | 'ó' | 'ú' | 'ñ' | 'ü' | 'Á' | 'É' | 'Í' | 'Ó' | 'Ú' | 'Ñ' | 'Ü')
+}
+
 fn peel(tok: &str) -> (String, String) {
-    let mut end = tok.len();
-    for (i, c) in tok.char_indices().rev() {
-        if c.is_alphanumeric() || c == 'á' || c == 'é' || c == 'í' || c == 'ó' || c == 'ú' || c == 'ñ' || c == 'ü'
-        {
-            break;
-        }
-        end = i;
+    let start = tok
+        .char_indices()
+        .find(|(_, c)| is_word_char(*c))
+        .map(|(i, _)| i)
+        .unwrap_or(tok.len());
+    let end = tok
+        .char_indices()
+        .rev()
+        .find(|(_, c)| is_word_char(*c))
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(start);
+    if start >= end {
+        return (tok.to_string(), String::new());
     }
-    (tok[..end].to_string(), tok[end..].to_string())
+    (tok[start..end].to_string(), tok[end..].to_string())
 }
 
 fn cap_first(s: &str) -> String {
@@ -417,6 +445,14 @@ mod tests {
         assert_eq!(
             translate_lex("en", "es", "Good afternoon"),
             "Buenas tardes"
+        );
+    }
+
+    #[test]
+    fn punctuated_ocr_line_still_translates() {
+        assert_eq!(
+            translate_lex("es", "en", "Them: Buenas tardes, ¿tiene paquete?"),
+            "Them: Good afternoon, you have a package"
         );
     }
 }

@@ -166,7 +166,7 @@ pub fn start_focus_watch() {}
 #[cfg(windows)]
 mod imp {
     use super::{
-        chat_pane_crop, crop_bgra, is_blank_bgra, looks_like_whatsapp, mask_bgra, pick_largest_hwnd,
+        chat_pane_crop, crop_bgra, is_blank_bgra, looks_like_whatsapp, pick_largest_hwnd,
         require_ocr_text, scale_bgra, OcrOut, WindowInfo,
     };
     use std::mem::size_of;
@@ -199,7 +199,7 @@ mod imp {
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetAncestor, GetClientRect, GetForegroundWindow, GetWindowRect,
         GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-        SetForegroundWindow, ShowWindow, GA_ROOT, SW_RESTORE,
+        SetForegroundWindow, ShowWindow, GA_ROOT, SW_HIDE, SW_RESTORE, SW_SHOWNOACTIVATE,
     };
 
     const MIN_CLIENT_W: i32 = 120;
@@ -282,8 +282,13 @@ mod imp {
         let title = window_title(hwnd);
         let exe = exe_path(hwnd);
         let win = window_bounds(hwnd)?;
-        let (mut bgra, mut w, mut h) = grab_bgra(hwnd)?;
-        mask_own_over(&mut bgra, w, h, win);
+        let hidden = hide_overlapping_own(win);
+        if !hidden.is_empty() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let grabbed = grab_bgra(hwnd);
+        restore_windows(&hidden);
+        let (mut bgra, mut w, mut h) = grabbed?;
         if looks_like_whatsapp(&title, &exe) {
             let (x, y, cw, ch) = chat_pane_crop(w, h);
             let cropped = crop_bgra(&bgra, w, h, x, y, cw, ch);
@@ -559,7 +564,11 @@ mod imp {
         BOOL(1)
     }
 
-    fn own_window_rects() -> Vec<RECT> {
+    fn rects_overlap(a: RECT, b: RECT) -> bool {
+        a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+    }
+
+    fn hide_overlapping_own(win: RECT) -> Vec<HWND> {
         let mut data = OwnWindows {
             pid: unsafe { GetCurrentProcessId() },
             hwnds: Vec::new(),
@@ -570,23 +579,25 @@ mod imp {
                 LPARAM(&mut data as *mut _ as isize),
             );
         }
-        data.hwnds
-            .into_iter()
-            .filter_map(|hwnd| window_bounds(hwnd).ok())
-            .collect()
+        let mut hidden = Vec::new();
+        for hwnd in data.hwnds {
+            let Ok(rc) = window_bounds(hwnd) else { continue };
+            if !rects_overlap(rc, win) {
+                continue;
+            }
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+            hidden.push(hwnd);
+        }
+        hidden
     }
 
-    fn mask_own_over(bgra: &mut [u8], w: u32, h: u32, win: RECT) {
-        for hole in own_window_rects() {
-            mask_bgra(
-                bgra,
-                w,
-                h,
-                hole.left - win.left,
-                hole.top - win.top,
-                hole.right - hole.left,
-                hole.bottom - hole.top,
-            );
+    fn restore_windows(hwnds: &[HWND]) {
+        for &hwnd in hwnds {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            }
         }
     }
 
